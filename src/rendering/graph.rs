@@ -931,8 +931,7 @@ impl NodeGraphRenderer {
                     )
                     .on_scroll_wheel(crate::rendering::input::on_scroll_wheel(cx))
                     .on_key_down(crate::rendering::input::on_key_down(cx)),
-            ), // close macro DropArea child
-        ) // close component DropArea child
+            ),
     }
 
     fn render_quick_palette_overlay_inner(
