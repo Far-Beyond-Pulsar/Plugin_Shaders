@@ -366,18 +366,47 @@ impl ShaderEditorPanel {
 
         // Add a couple of sample nodes using the definitions system
         let definitions = crate::core::definitions::NodeDefinitions::load();
-        if let Some(input_category) = definitions.categories.iter().find(|c| c.name == "Input") {
-            if let Some(input_def) = input_category.nodes.first() {
-                let node = BlueprintNode::from_definition(input_def, Point::new(-200.0, 0.0));
-                graph.nodes.push(node);
+
+        // Demo graph: a shifting rainbow gradient.
+        //   frag_uv ──┐
+        //             ├─▶ rainbow ──▶ fragment_output
+        //   time ─────┘
+        //
+        // Every shader graph is a pure dataflow ending in a single output
+        // node (fragment_output/vertex_output) — PSGC compiles from that
+        // node's inputs, so every new graph ends with one.
+        let mut add_node = |id: &str, position: Point<f32>| -> Option<String> {
+            let def = definitions.get_node_definition(id)?;
+            let node = BlueprintNode::from_definition(def, position);
+            let node_id = node.id.clone();
+            graph.nodes.push(node);
+            Some(node_id)
+        };
+
+        let frag_uv_id = add_node("frag_uv", Point::new(-400.0, -80.0));
+        let time_id = add_node("time", Point::new(-400.0, 80.0));
+        let rainbow_id = add_node("rainbow", Point::new(-100.0, 0.0));
+        let output_id = add_node("fragment_output", Point::new(200.0, 0.0));
+
+        let mut connect = |source_node: &Option<String>,
+                            source_pin: &str,
+                            target_node: &Option<String>,
+                            target_pin: &str| {
+            if let (Some(source_node), Some(target_node)) = (source_node, target_node) {
+                graph.connections.push(Connection {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    source_node: source_node.clone(),
+                    source_pin: source_pin.to_string(),
+                    target_node: target_node.clone(),
+                    target_pin: target_pin.to_string(),
+                    connection_type: ui::graph::ConnectionType::Data,
+                });
             }
-        }
-        if let Some(output_category) = definitions.categories.iter().find(|c| c.name == "Output") {
-            if let Some(output_def) = output_category.nodes.first() {
-                let node = BlueprintNode::from_definition(output_def, Point::new(200.0, 0.0));
-                graph.nodes.push(node);
-            }
-        }
+        };
+
+        connect(&frag_uv_id, "result", &rainbow_id, "uv");
+        connect(&time_id, "result", &rainbow_id, "shift");
+        connect(&rainbow_id, "result", &output_id, "color");
 
         graph
     }

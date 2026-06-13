@@ -41,8 +41,9 @@ pub struct NodeDefinition {
     pub outputs: Vec<PinDefinition>,
     pub properties: HashMap<String, String>,
     pub color: Option<String>,
-    /// True when this node is an entry-point (e.g. vertex_main, fragment_main).
-    /// Used to classify as NodeType::Event.
+    /// True when the underlying shader node is `NodeTypes::event`.
+    /// Used to classify as NodeType::Event. No shader graph nodes are
+    /// currently events — every node, including the output sink, is pure.
     #[serde(default)]
     pub is_event: bool,
 }
@@ -132,9 +133,11 @@ impl NodeDefinitions {
 
             let category = node_meta.category.clone();
             let description = format!("{} ({})", node_meta.name, node_meta.category);
-            let is_event = matches!(node_meta.node_type, NodeTypes::event)
-                || category == "Entry"
-                || category == "Output";
+            // Shader graphs are fully pure dataflow: the output node is a
+            // pure sink, not an execution event, so only an actual
+            // `NodeTypes::event` node (none remain in wgsl_std) is treated
+            // as an event for visual classification.
+            let is_event = matches!(node_meta.node_type, NodeTypes::event);
 
             let static_def = NodeDefinition {
                 id: node_meta.name.clone(),
@@ -153,7 +156,7 @@ impl NodeDefinitions {
                 inputs,
                 outputs,
                 properties: HashMap::new(),
-                color: None,
+                color: Some(Self::get_category_color(&category)),
                 is_event,
             };
 

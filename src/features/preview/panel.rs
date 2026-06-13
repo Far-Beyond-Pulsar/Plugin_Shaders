@@ -21,6 +21,7 @@ pub struct MaterialPreviewPanel {
     surface_handle: Option<gpui::WgpuSurfaceHandle>,
     needs_rebuild: bool,
     last_shader_source: Option<String>,
+    compile_requested: bool,
     subscriptions: Vec<Subscription>,
 }
 
@@ -39,6 +40,7 @@ impl MaterialPreviewPanel {
             surface_handle: None,
             needs_rebuild: true,
             last_shader_source: None,
+            compile_requested: false,
             subscriptions: Vec::new(),
         }
     }
@@ -52,9 +54,6 @@ impl MaterialPreviewPanel {
             return;
         }
 
-        let Some(device) = self.renderer.device.clone() else { return };
-        let Some(queue) = self.renderer.queue.clone() else { return };
-
         let size = window.bounds().size;
         let width = (size.width.to_f64() as u32).max(1);
         let height = (size.height.to_f64() as u32).max(1);
@@ -62,6 +61,13 @@ impl MaterialPreviewPanel {
         let Some(surface) = window.create_wgpu_surface(width, height, wgpu::TextureFormat::Bgra8Unorm) else {
             return;
         };
+
+        // The renderer has no device/queue of its own until `initialize()`
+        // runs below — pull them from the freshly created surface instead
+        // of `self.renderer.device`/`queue` (which would always be `None`
+        // here, causing this function to bail out on every call).
+        let device = surface.device().clone();
+        let queue = surface.queue().clone();
 
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -76,6 +82,13 @@ impl MaterialPreviewPanel {
 
         self.renderer.initialize(&device, &queue, &config);
         self.renderer.update_camera(width as f32 / height as f32);
+
+        // Upload the preview mesh now that the renderer has a device/queue —
+        // without this, `PreviewRenderer::render()` bails out before ever
+        // clearing the surface, leaving it grey.
+        let mesh_data = generate_mesh_data(self.current_mesh);
+        self.renderer
+            .update_mesh(&mesh_data.vertices, &mesh_data.indices, mesh_data.index_count);
 
         self.surface_handle = Some(surface);
         self.needs_rebuild = false;
@@ -125,6 +138,15 @@ impl MaterialPreviewPanel {
         let wgsl_to_compile: Option<String> = self.editor.upgrade()
             .and_then(|editor| editor.read(cx).last_compiled_wgsl.clone());
 
+        // Trigger an initial compile so the preview has a shader pipeline
+        // without requiring the user to press "Compile" first.
+        if wgsl_to_compile.is_none() && !self.compile_requested {
+            self.compile_requested = true;
+            if let Some(editor) = self.editor.upgrade() {
+                editor.update(cx, |panel, cx| panel.start_compilation(cx));
+            }
+        }
+
         if let Some(ref wgsl) = wgsl_to_compile {
             if self.renderer.device.is_some() && self.renderer.queue.is_some() {
                 self.update_shader(wgsl);
@@ -134,13 +156,42 @@ impl MaterialPreviewPanel {
         if let Some(surface) = &self.surface_handle {
             if let Some(view) = surface.back_buffer_view() {
                 self.renderer.render(&view);
-                surface.present();
+                surface.swap_buffers();
             }
         }
 
+        // The rendered texture only appears once `wgpu_surface()` is present
+        // in the element tree — the surface element handles resizing itself
+        // to match its layout bounds, so the initial size doesn't matter.
+        //
+        // Sized via normal flow (`flex_1` + `min_h`) rather than absolute
+        // positioning: an absolutely-positioned child doesn't contribute to
+        // its parent's intrinsic size, so if the parent's height ever ends
+        // up "auto" the surface collapses to zero height and the dock shows
+        // its own background instead of the rendered frame.
+        let gpu_display: AnyElement = if let Some(surface) = &self.surface_handle {
+            wgpu_surface(surface.clone())
+                .defer_resize_until_mouse_up(true)
+                .size_full()
+                .into_any_element()
+        } else {
+            div()
+                .size_full()
+                .bg(gpui::rgb(0x1a1a1a))
+                .into_any_element()
+        };
+
+        // Keep redrawing every frame for auto-rotate and the shifting
+        // rainbow's `time` uniform.
+        cx.notify();
+
         div()
             .size_full()
+            .min_h(px(200.))
+            .flex_1()
+            .overflow_hidden()
             .bg(gpui::rgb(0x1a1a1a))
+            .child(gpu_display)
             .into_any_element()
     }
 }
@@ -160,6 +211,7 @@ impl Render for MaterialPreviewPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
+            .min_h(px(200.))
             .child(self.render_preview(window, cx))
     }
 }

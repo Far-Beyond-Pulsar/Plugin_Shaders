@@ -35,10 +35,37 @@ struct Uniforms {
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 
+// WGSL has no built-in matrix inverse. This computes `transpose(inverse(m))`
+// directly via the adjugate/determinant method — i.e. the normal matrix for
+// model matrix `m` — since that's the only thing it's used for here.
+fn normal_matrix3x3(m: mat3x3<f32>) -> mat3x3<f32> {
+    let a = m[0];
+    let b = m[1];
+    let c = m[2];
+
+    let cross_bc = cross(b, c);
+    let cross_ca = cross(c, a);
+    let cross_ab = cross(a, b);
+
+    let det = dot(a, cross_bc);
+    let inv_det = 1.0 / det;
+
+    return mat3x3<f32>(
+        cross_bc * inv_det,
+        cross_ca * inv_det,
+        cross_ab * inv_det,
+    );
+}
+
 @vertex
 fn vertex_main(input: VertexInput) -> VertexOutput {
     let world_pos = (uniforms.model * vec4(input.position, 1.0)).xyz;
-    let normal_mat = transpose(inverse(mat3x3(uniforms.model)));
+    let model3 = mat3x3<f32>(
+        uniforms.model[0].xyz,
+        uniforms.model[1].xyz,
+        uniforms.model[2].xyz,
+    );
+    let normal_mat = normal_matrix3x3(model3);
 
     var output: VertexOutput;
     output.position = uniforms.view_proj * vec4(world_pos, 1.0);
@@ -49,40 +76,109 @@ fn vertex_main(input: VertexInput) -> VertexOutput {
 }
 "#;
 
-const FRAGMENT_SHADER_WRAPPER_PREFIX: &str = r#"
+/// Fullscreen sky/horizon gradient, drawn behind the preview mesh.
+///
+/// Reconstructs a view ray per-pixel from the camera basis vectors (no
+/// matrix inversion needed) and shades it with a zenith→horizon→ground
+/// gradient, a warm horizon glow band, and a slowly orbiting sun — handy as
+/// a stable visual reference for checking the camera's orientation.
+const SKY_SHADER_SRC: &str = r#"
+struct SkyUniforms {
+    camera_right: vec4<f32>,
+    camera_up: vec4<f32>,
+    camera_forward: vec4<f32>,
+    params: vec4<f32>, // tan(fov_y / 2), aspect, time, unused
+};
+
+@group(0) @binding(0) var<uniform> sky: SkyUniforms;
+
 struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) normal: vec3<f32>,
-    @location(2) world_pos: vec3<f32>,
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) ndc: vec2<f32>,
 };
 
-struct Uniforms {
-    view_proj: mat4x4<f32>,
-    model: mat4x4<f32>,
-    time: f32,
-};
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    var positions = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>(3.0, -1.0),
+        vec2<f32>(-1.0, 3.0),
+    );
 
-@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+    var out: VertexOutput;
+    let p = positions[vertex_index];
+    out.clip_position = vec4<f32>(p, 0.0, 1.0);
+    out.ndc = p;
+    return out;
+}
 
 @fragment
-fn fragment_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    // User shader code follows:
-"#;
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let tan_half_fovy = sky.params.x;
+    let aspect = sky.params.y;
+    let time = sky.params.z;
 
-const FRAGMENT_SHADER_WRAPPER_SUFFIX: &str = r#"
+    let right = sky.camera_right.xyz;
+    let up = sky.camera_up.xyz;
+    let forward = sky.camera_forward.xyz;
+
+    let dir = normalize(
+        forward
+            + in.ndc.x * tan_half_fovy * aspect * right
+            + in.ndc.y * tan_half_fovy * up
+    );
+
+    let zenith = vec3<f32>(0.10, 0.30, 0.70);
+    let horizon_sky = vec3<f32>(0.75, 0.86, 0.97);
+    let horizon_ground = vec3<f32>(0.55, 0.50, 0.45);
+    let ground = vec3<f32>(0.16, 0.15, 0.14);
+
+    let h = dir.y;
+    var color: vec3<f32>;
+    if (h >= 0.0) {
+        color = mix(horizon_sky, zenith, pow(h, 0.45));
+    } else {
+        color = mix(horizon_ground, ground, pow(clamp(-h, 0.0, 1.0), 0.5));
+    }
+
+    // Warm horizon glow band.
+    let glow = exp(-abs(h) * 12.0) * 0.5;
+    color = color + vec3<f32>(1.0, 0.85, 0.6) * glow;
+
+    // Slowly orbiting sun: bright core plus a soft halo.
+    let sun_angle = time * 0.1;
+    let sun_dir = normalize(vec3<f32>(cos(sun_angle), 0.35, sin(sun_angle)));
+    let sun_dot = dot(dir, sun_dir);
+    let sun_disc = smoothstep(0.9995, 0.9999, sun_dot);
+    let sun_halo = pow(max(sun_dot, 0.0), 64.0) * 0.6;
+    color = color + vec3<f32>(1.0, 0.95, 0.8) * (sun_disc + sun_halo);
+
+    return vec4<f32>(color, 1.0);
 }
 "#;
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct SkyUniforms {
+    camera_right: [f32; 4],
+    camera_up: [f32; 4],
+    camera_forward: [f32; 4],
+    params: [f32; 4],
+}
 
 pub struct PreviewRenderer {
     pub device: Option<Device>,
     pub queue: Option<Queue>,
     pipeline: Option<RenderPipeline>,
+    pipeline_layout: Option<PipelineLayout>,
     uniform_buffer: Option<Buffer>,
     bind_group: Option<BindGroup>,
     pub mesh_vertex_buffer: Option<Buffer>,
     pub mesh_index_buffer: Option<Buffer>,
     pub mesh_index_count: u32,
+    sky_pipeline: Option<RenderPipeline>,
+    sky_uniform_buffer: Option<Buffer>,
+    sky_bind_group: Option<BindGroup>,
     pub camera: OrbitCamera,
     shader_module: Option<ShaderModule>,
     surface_config: Option<SurfaceConfiguration>,
@@ -97,11 +193,15 @@ impl PreviewRenderer {
             device: None,
             queue: None,
             pipeline: None,
+            pipeline_layout: None,
             uniform_buffer: None,
             bind_group: None,
             mesh_vertex_buffer: None,
             mesh_index_buffer: None,
             mesh_index_count: 0,
+            sky_pipeline: None,
+            sky_uniform_buffer: None,
+            sky_bind_group: None,
             camera: OrbitCamera {
                 yaw: 0.0,
                 pitch: 0.4,
@@ -163,30 +263,114 @@ impl PreviewRenderer {
             }],
         });
         self.bind_group = Some(bind_group);
+        self.pipeline_layout = Some(pipeline_layout);
+
+        // Sky pass: its own uniform buffer/bind group/pipeline so it stays
+        // independent of whatever bind group layout the compiled material
+        // shader derives.
+        let sky_uniform_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("sky uniforms"),
+            size: std::mem::size_of::<SkyUniforms>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let sky_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("sky bind group layout"),
+            entries: &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let sky_bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("sky bind group"),
+            layout: &sky_bind_group_layout,
+            entries: &[BindGroupEntry {
+                binding: 0,
+                resource: sky_uniform_buffer.as_entire_binding(),
+            }],
+        });
+
+        let sky_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("sky pipeline layout"),
+            bind_group_layouts: &[Some(&sky_bind_group_layout)],
+            immediate_size: 0,
+        });
+
+        let sky_module = device.create_shader_module(ShaderModuleDescriptor {
+            label: Some("sky shader"),
+            source: ShaderSource::Wgsl(SKY_SHADER_SRC.into()),
+        });
+
+        let sky_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("sky pipeline"),
+            layout: Some(&sky_pipeline_layout),
+            vertex: VertexState {
+                module: &sky_module,
+                entry_point: Some("vs_main"),
+                compilation_options: PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            fragment: Some(FragmentState {
+                module: &sky_module,
+                entry_point: Some("fs_main"),
+                compilation_options: PipelineCompilationOptions::default(),
+                targets: &[Some(ColorTargetState {
+                    format: config.format,
+                    blend: Some(BlendState::REPLACE),
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        self.sky_uniform_buffer = Some(sky_uniform_buffer);
+        self.sky_bind_group = Some(sky_bind_group);
+        self.sky_pipeline = Some(sky_pipeline);
     }
 
     pub fn update_shader(&mut self, wgsl_source: &str) {
-        let wrapper_source = format!(
-            "{}\n{}\n{}",
-            FRAGMENT_SHADER_WRAPPER_PREFIX, wgsl_source, FRAGMENT_SHADER_WRAPPER_SUFFIX
-        );
-
+        // PSGC compiles each shader graph to a complete, self-contained
+        // `@fragment fn fragment_main(...)` module — use it directly as the
+        // fragment shader rather than wrapping it inside another function.
         if let Some(device) = &self.device {
             let vs_module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some("preview vertex shader"),
                 source: ShaderSource::Wgsl(VERTEX_SHADER_SRC.into()),
             });
 
-            let fs_module = match device.create_shader_module(ShaderModuleDescriptor {
+            let fs_module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some("preview fragment shader"),
-                source: ShaderSource::Wgsl(wrapper_source.into()),
-            }) {
-                module => module,
-            };
+                source: ShaderSource::Wgsl(wgsl_source.into()),
+            });
 
             let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
                 label: Some("preview pipeline"),
-                layout: None,
+                // Use the bind group layout created in `initialize()` (and
+                // shared with `self.bind_group`) explicitly — `layout: None`
+                // would derive its own internal layout via shader
+                // reflection, which is a *different* layout object and is
+                // incompatible with `self.bind_group` at draw time.
+                layout: self.pipeline_layout.as_ref(),
                 vertex: VertexState {
                     module: &vs_module,
                     entry_point: Some("vertex_main"),
@@ -281,32 +465,17 @@ impl PreviewRenderer {
     pub fn render(&self, output: &TextureView) {
         let Some(device) = &self.device else { return };
         let Some(queue) = &self.queue else { return };
-        let Some(pipeline) = &self.pipeline else {
+        let Some(sky_pipeline) = &self.sky_pipeline else {
             return;
         };
-        let Some(uniform_buffer) = &self.uniform_buffer else {
+        let Some(sky_uniform_buffer) = &self.sky_uniform_buffer else {
             return;
         };
-        let Some(bind_group) = &self.bind_group else {
+        let Some(sky_bind_group) = &self.sky_bind_group else {
             return;
         };
-        let Some(vertex_buffer) = &self.mesh_vertex_buffer else {
-            return;
-        };
-        let Some(index_buffer) = &self.mesh_index_buffer else {
-            return;
-        };
-        if self.mesh_index_count == 0 {
-            return;
-        }
 
         let elapsed = self.start_time.elapsed().as_secs_f32();
-        let model: [[f32; 4]; 4] = [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ];
 
         let view = self.camera.view_matrix();
         let proj = self.camera.projection_matrix();
@@ -320,14 +489,46 @@ impl PreviewRenderer {
             }
         }
 
-        let uniforms = PreviewUniforms {
-            view_proj,
-            model,
-            time: elapsed,
-            _padding: [0.0; 3],
+        let (right, up, forward) = self.camera.basis_vectors();
+        let sky_uniforms = SkyUniforms {
+            camera_right: [right[0], right[1], right[2], 0.0],
+            camera_up: [up[0], up[1], up[2], 0.0],
+            camera_forward: [forward[0], forward[1], forward[2], 0.0],
+            params: [
+                (self.camera.fov_y * 0.5).tan(),
+                self.camera.aspect,
+                elapsed,
+                0.0,
+            ],
         };
+        queue.write_buffer(sky_uniform_buffer, 0, bytemuck::bytes_of(&sky_uniforms));
 
-        queue.write_buffer(uniform_buffer, 0, bytemuck::bytes_of(&uniforms));
+        // Only draw the material mesh once both the compiled-shader pipeline
+        // and the mesh geometry are uploaded; the sky still renders on its
+        // own otherwise, so the surface is never left blank/grey.
+        let mesh_ready = self.pipeline.is_some()
+            && self.uniform_buffer.is_some()
+            && self.bind_group.is_some()
+            && self.mesh_vertex_buffer.is_some()
+            && self.mesh_index_buffer.is_some()
+            && self.mesh_index_count > 0;
+
+        if mesh_ready {
+            let model: [[f32; 4]; 4] = [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ];
+
+            let uniforms = PreviewUniforms {
+                view_proj,
+                model,
+                time: elapsed,
+                _padding: [0.0; 3],
+            };
+            queue.write_buffer(self.uniform_buffer.as_ref().unwrap(), 0, bytemuck::bytes_of(&uniforms));
+        }
 
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("preview encoder"),
@@ -356,11 +557,23 @@ impl PreviewRenderer {
                 multiview_mask: None,
             });
 
-            rpass.set_pipeline(pipeline);
-            rpass.set_bind_group(0, bind_group, &[]);
-            rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
-            rpass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
-            rpass.draw_indexed(0..self.mesh_index_count, 0, 0..1);
+            // Sky/horizon gradient first, covering the whole viewport.
+            rpass.set_pipeline(sky_pipeline);
+            rpass.set_bind_group(0, sky_bind_group, &[]);
+            rpass.draw(0..3, 0..1);
+
+            if mesh_ready {
+                let pipeline = self.pipeline.as_ref().unwrap();
+                let bind_group = self.bind_group.as_ref().unwrap();
+                let vertex_buffer = self.mesh_vertex_buffer.as_ref().unwrap();
+                let index_buffer = self.mesh_index_buffer.as_ref().unwrap();
+
+                rpass.set_pipeline(pipeline);
+                rpass.set_bind_group(0, bind_group, &[]);
+                rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
+                rpass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
+                rpass.draw_indexed(0..self.mesh_index_count, 0, 0..1);
+            }
         }
 
         queue.submit(Some(encoder.finish()));

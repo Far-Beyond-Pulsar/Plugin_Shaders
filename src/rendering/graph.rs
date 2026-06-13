@@ -876,7 +876,7 @@ impl NodeGraphRenderer {
         };
 
         // Wrap the canvas in drop area for palette items
-        div().child(
+        div().size_full().child(
                 div()
                     .size_full()
                     .relative()
