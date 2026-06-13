@@ -104,3 +104,17 @@ pub struct SelectionInstance {
     pub pos: [f32; 2],  // graph space
     pub size: [f32; 2], // graph space
 }
+
+// ── Texture preview quads ─────────────────────────────────────────────────────
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct TexturePreviewInstance {
+    pub pos: [f32; 2],
+    pub size: [f32; 2],
+}
+
+#[derive(Clone)]
+pub struct TexturePreview {
+    pub view: wgpu::TextureView,
+    pub instance: TexturePreviewInstance,
+}

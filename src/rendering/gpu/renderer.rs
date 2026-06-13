@@ -12,7 +12,8 @@
 
 use super::text::{TextAlign, TextRenderer};
 use super::types::{
-    CommentInstance, GraphUniforms, NodeInstance, PinInstance, WireInstance, WireVertex,
+    CommentInstance, GraphUniforms, NodeInstance, PinInstance, TexturePreview,
+    TexturePreviewInstance, WireInstance, WireVertex,
 };
 
 const WIRE_SEGS: u32 = 32;
@@ -67,6 +68,16 @@ struct PinState {
     inst_cap: u64,
 }
 
+struct TexturePreviewState {
+    pipeline: wgpu::RenderPipeline,
+    uni_buf: wgpu::Buffer,
+    uni_bg: wgpu::BindGroup,
+    tex_bgl: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    inst_buf: wgpu::Buffer,
+    inst_cap: u64,
+}
+
 // ─── public renderer ──────────────────────────────────────────────────────────
 
 pub struct BpRenderer {
@@ -76,6 +87,7 @@ pub struct BpRenderer {
     bezier: Option<BezierState>,
     lines: Option<LineState>,
     pins: Option<PinState>,
+    texture_previews: Option<TexturePreviewState>,
     text: TextRenderer,
 }
 
@@ -88,6 +100,7 @@ impl BpRenderer {
             bezier: None,
             lines: None,
             pins: None,
+            texture_previews: None,
             text: TextRenderer::new(),
         }
     }
@@ -112,6 +125,7 @@ impl BpRenderer {
         wire_instances: &[WireInstance],
         line_verts: &[WireVertex],
         pins: &[PinInstance],
+        texture_previews: &[TexturePreview],
         text_calls: &[(String, f32, f32, f32, [f32; 4], bool)],
     ) {
         if self.grid.is_none() {
@@ -121,6 +135,7 @@ impl BpRenderer {
             self.bezier = Some(Self::create_bezier(device, fmt));
             self.lines = Some(Self::create_lines(device, fmt));
             self.pins = Some(Self::create_pins(device, fmt));
+            self.texture_previews = Some(Self::create_texture_previews(device, fmt));
         }
 
         let uni_bytes = bytemuck::bytes_of(uniforms);
@@ -242,7 +257,52 @@ impl BpRenderer {
                 }
             }
 
-            // ── 6. Pins ────────────────────────────────────────────────────────
+            // ── 6. Texture previews ───────────────────────────────────────────
+            if !texture_previews.is_empty() {
+                if let Some(ts) = &mut self.texture_previews {
+                    queue.write_buffer(&ts.uni_buf, 0, uni_bytes);
+                    let instances: Vec<TexturePreviewInstance> = texture_previews
+                        .iter()
+                        .map(|preview| preview.instance)
+                        .collect();
+                    let bytes = bytemuck::cast_slice(&instances);
+                    Self::ensure_buf(
+                        device,
+                        &mut ts.inst_buf,
+                        &mut ts.inst_cap,
+                        bytes,
+                        wgpu::BufferUsages::VERTEX,
+                    );
+                    queue.write_buffer(&ts.inst_buf, 0, bytes);
+                    pass.set_pipeline(&ts.pipeline);
+                    pass.set_bind_group(0, &ts.uni_bg, &[]);
+
+                    let stride = std::mem::size_of::<TexturePreviewInstance>() as u64;
+                    for (index, preview) in texture_previews.iter().enumerate() {
+                        let tex_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("bp_texture_preview_bg"),
+                            layout: &ts.tex_bgl,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: wgpu::BindingResource::TextureView(&preview.view),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::Sampler(&ts.sampler),
+                                },
+                            ],
+                        });
+                        let start = index as u64 * stride;
+                        let end = start + stride;
+                        pass.set_bind_group(1, &tex_bg, &[]);
+                        pass.set_vertex_buffer(0, ts.inst_buf.slice(start..end));
+                        pass.draw(0..6, 0..1);
+                    }
+                }
+            }
+
+            // ── 7. Pins ────────────────────────────────────────────────────────
             if !pins.is_empty() {
                 if let Some(ps) = &mut self.pins {
                     queue.write_buffer(&ps.uni_buf, 0, uni_bytes);
@@ -262,7 +322,7 @@ impl BpRenderer {
                 }
             }
 
-            // ── 7. Text ─────────────────────────────────────────────────────────
+            // ── 8. Text ─────────────────────────────────────────────────────────
             // Queue all text calls, then flush into this render pass.
             for (text, sx, sy, size, color, center) in text_calls {
                 let align = if *center {
@@ -670,6 +730,105 @@ impl BpRenderer {
             uni_bg,
             vert_buf,
             vert_cap: init_cap,
+        }
+    }
+
+    // ── texture preview pipeline ──────────────────────────────────────────────
+    fn create_texture_previews(
+        device: &wgpu::Device,
+        fmt: wgpu::TextureFormat,
+    ) -> TexturePreviewState {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("texture_previews"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/texture_previews.wgsl").into()),
+        });
+        let uni_bgl = Self::uni_bind_group_layout(device);
+        let (uni_buf, uni_bg) = Self::uni_buf_and_bg(device, &uni_bgl);
+        let tex_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("bp_texture_preview_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("texture_previews_layout"),
+            bind_group_layouts: &[Some(&uni_bgl), Some(&tex_bgl)],
+            immediate_size: 0,
+        });
+
+        let attrs = wgpu::vertex_attr_array![
+            0 => Float32x2,
+            1 => Float32x2,
+        ];
+        let vbl = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<TexturePreviewInstance>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &attrs,
+        };
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("texture_previews_pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[vbl],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(Self::alpha_blend_target(fmt))],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("bp_texture_preview_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+
+        let inst_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("texture_preview_inst"),
+            size: 256,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        TexturePreviewState {
+            pipeline,
+            uni_buf,
+            uni_bg,
+            tex_bgl,
+            sampler,
+            inst_buf,
+            inst_cap: 256,
         }
     }
 

@@ -11,20 +11,21 @@
 // GPU does all actual drawing: grid, node bodies, wires, pins, text glyphs.
 // No GPUI canvas overlay is used for graph content — including text.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
+use crate::core::types::PinDataType as DataType;
 use gpui::prelude::*;
 use gpui::*;
-use crate::core::types::PinDataType as DataType;
 use ui::ActiveTheme;
 use ui::PixelsExt;
 
 use crate::core::graph::BlueprintGraph;
-use crate::core::types::{BlueprintComment, BlueprintNode, Connection, NodeType, Pin};
-use crate::editor::workspace_panels::GraphCanvasPanel;
-use crate::features::connections::operations::ConnectionDrag;
-use crate::rendering::gpu::{ GraphUniforms, NodeInstance, PinInstance, WireInstance, WireVertex,
+use crate::core::types::{BlueprintComment, BlueprintNode, Connection, NodeType};
+use crate::editor::workspace_panels::{GraphCanvasPanel, PinPreviewCacheEntry};
+use crate::rendering::gpu::{
+    GraphUniforms, NodeInstance, PinInstance, PinPreviewRenderer, TexturePreview,
+    TexturePreviewInstance, WireInstance, WireVertex,
 };
 use crate::rendering::layout;
 
@@ -35,6 +36,8 @@ pub const BODY_PAD: f32 = layout::BODY_PAD;
 pub const PIN_ROW_H: f32 = layout::PIN_ROW_H;
 pub const PIN_GAP: f32 = layout::PIN_GAP;
 pub const PIN_SIZE: f32 = layout::PIN_SIZE;
+pub const TEXTURE_PREVIEW_SIZE: f32 = layout::TEXTURE_PREVIEW_SIZE;
+pub const TEXTURE_PREVIEW_GAP: f32 = layout::TEXTURE_PREVIEW_GAP;
 
 const WIRE_SEGS: usize = 32;
 const WIRE_THICKNESS: f32 = 2.8;
@@ -43,6 +46,7 @@ const PIN_FONT: f32 = 10.5;
 const HEADER_PAD_X: f32 = 9.0;
 const COMMENT_TITLE_PAD_X: f32 = 12.0;
 const COMMENT_TITLE_PAD_Y: f32 = 6.0;
+const PIN_PREVIEW_TEXELS: u32 = 96;
 
 pub struct NodeGraphRenderer;
 
@@ -94,10 +98,7 @@ impl NodeGraphRenderer {
     ) -> Point<f32> {
         let zoom = graph.zoom_level;
         let scr = Self::graph_to_screen_pos(node.position, graph);
-        let py = scr.y
-            + (HEADER_H + SEP_H + BODY_PAD) * zoom
-            + row as f32 * (PIN_ROW_H + PIN_GAP) * zoom
-            + PIN_ROW_H * 0.5 * zoom;
+        let py = scr.y + (HEADER_H + SEP_H + BODY_PAD + pin_row_center_offset(node, row)) * zoom;
         let px_ = if is_input {
             scr.x + BODY_PAD * zoom
         } else {
@@ -129,12 +130,7 @@ impl NodeGraphRenderer {
         row: usize,
         _graph: &BlueprintGraph,
     ) -> Point<f32> {
-        let py = node.position.y
-            + HEADER_H
-            + SEP_H
-            + BODY_PAD
-            + row as f32 * (PIN_ROW_H + PIN_GAP)
-            + PIN_ROW_H * 0.5;
+        let py = node.position.y + HEADER_H + SEP_H + BODY_PAD + pin_row_center_offset(node, row);
         let px_ = if is_input {
             node.position.x + BODY_PAD
         } else {
@@ -241,12 +237,7 @@ fn pin_gpos_row(node: &BlueprintNode, is_input: bool, row: usize) -> (f32, f32) 
     if node.node_type == NodeType::Reroute {
         return (node.position.x, node.position.y);
     }
-    let py = node.position.y
-        + HEADER_H
-        + SEP_H
-        + BODY_PAD
-        + row as f32 * (PIN_ROW_H + PIN_GAP)
-        + PIN_ROW_H * 0.5;
+    let py = node.position.y + HEADER_H + SEP_H + BODY_PAD + pin_row_center_offset(node, row);
     let px = if is_input {
         node.position.x + BODY_PAD
     } else {
@@ -266,6 +257,68 @@ fn pin_gpos_id(node: &BlueprintNode, pin_id: &str, is_input: bool) -> Option<(f3
         node.outputs.iter().position(|p| p.id == pin_id)?
     };
     Some(pin_gpos_row(node, is_input, row))
+}
+
+fn pin_row_center_offset(node: &BlueprintNode, row: usize) -> f32 {
+    layout::pin_row_center_y(&node.inputs, &node.outputs, row)
+}
+
+fn pin_preview_rect(node: &BlueprintNode, row: usize) -> Option<([f32; 2], [f32; 2])> {
+    let pin = node.outputs.get(row)?;
+    if !pin.data_type.is_texture_previewable() {
+        return None;
+    }
+
+    let row_top = node.position.y
+        + HEADER_H
+        + SEP_H
+        + BODY_PAD
+        + layout::pin_row_offset(&node.inputs, &node.outputs, row);
+    let row_height = layout::pin_row_height(node.inputs.get(row), node.outputs.get(row));
+    let right = node.position.x + node.size.width - BODY_PAD - PIN_SIZE * 0.5 - TEXTURE_PREVIEW_GAP;
+    let left = right - TEXTURE_PREVIEW_SIZE;
+    let top = row_top + (row_height - TEXTURE_PREVIEW_SIZE) * 0.5;
+    Some(([left, top], [TEXTURE_PREVIEW_SIZE, TEXTURE_PREVIEW_SIZE]))
+}
+
+#[derive(Clone)]
+struct PinPreviewRequest {
+    cache_key: String,
+    node_id: String,
+    pin_id: String,
+    instance: TexturePreviewInstance,
+}
+
+fn graph_preview_signature(graph: &BlueprintGraph) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+
+    for node in &graph.nodes {
+        node.id.hash(&mut hasher);
+        node.definition_id.hash(&mut hasher);
+        for pin in &node.inputs {
+            pin.id.hash(&mut hasher);
+            pin.data_type.type_name.hash(&mut hasher);
+        }
+        for pin in &node.outputs {
+            pin.id.hash(&mut hasher);
+            pin.data_type.type_name.hash(&mut hasher);
+        }
+        let mut props: Vec<_> = node.properties.iter().collect();
+        props.sort_by(|a, b| a.0.cmp(b.0));
+        for (key, value) in props {
+            key.hash(&mut hasher);
+            value.hash(&mut hasher);
+        }
+    }
+
+    for conn in &graph.connections {
+        conn.source_node.hash(&mut hasher);
+        conn.source_pin.hash(&mut hasher);
+        conn.target_node.hash(&mut hasher);
+        conn.target_pin.hash(&mut hasher);
+    }
+
+    hasher.finish()
 }
 
 fn bezier(p0: (f32, f32), p1: (f32, f32), p2: (f32, f32), p3: (f32, f32), t: f32) -> (f32, f32) {
@@ -392,6 +445,95 @@ fn tessellate_line(
     ]
 }
 
+fn ensure_preview_texture(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("graph_pin_preview_texture"),
+        size: wgpu::Extent3d {
+            width: PIN_PREVIEW_TEXELS,
+            height: PIN_PREVIEW_TEXELS,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: PinPreviewRenderer::TEXTURE_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
+}
+
+impl GraphCanvasPanel {
+    fn build_texture_previews(
+        &mut self,
+        requests: &[PinPreviewRequest],
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        time: f32,
+        cx: &mut Context<Self>,
+    ) -> Vec<TexturePreview> {
+        let graph_signature = graph_preview_signature(&self.graph);
+        let request_keys: HashSet<&str> = requests
+            .iter()
+            .map(|request| request.cache_key.as_str())
+            .collect();
+        self.pin_preview_cache
+            .retain(|key, _| request_keys.contains(key.as_str()));
+
+        let mut previews = Vec::with_capacity(requests.len());
+        let editor = self.panel.upgrade();
+
+        for request in requests {
+            let Some(editor) = editor.as_ref() else {
+                continue;
+            };
+
+            let rebuild = match self.pin_preview_cache.get(&request.cache_key) {
+                Some(entry) => entry.graph_signature != graph_signature,
+                None => true,
+            };
+
+            if rebuild {
+                let Ok(wgsl) = editor.read(cx).compile_preview_wgsl_for_pin(
+                    &self.graph,
+                    &request.node_id,
+                    &request.pin_id,
+                ) else {
+                    self.pin_preview_cache.remove(&request.cache_key);
+                    continue;
+                };
+
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                wgsl.hash(&mut hasher);
+                let shader_hash = hasher.finish();
+                let (texture, view) = ensure_preview_texture(device);
+                let renderer = PinPreviewRenderer::new(device, &wgsl);
+                self.pin_preview_cache.insert(
+                    request.cache_key.clone(),
+                    PinPreviewCacheEntry {
+                        graph_signature,
+                        shader_hash,
+                        renderer,
+                        texture,
+                        view,
+                    },
+                );
+            }
+
+            if let Some(entry) = self.pin_preview_cache.get_mut(&request.cache_key) {
+                entry.renderer.render(device, queue, &entry.view, time);
+                previews.push(TexturePreview {
+                    view: entry.view.clone(),
+                    instance: request.instance,
+                });
+            }
+        }
+
+        previews
+    }
+}
+
 // ─── main render ──────────────────────────────────────────────────────────────
 
 type TextCall = (String, f32, f32, f32, [f32; 4], bool); // (text, x, y, size, color, center)
@@ -434,13 +576,13 @@ impl NodeGraphRenderer {
         };
 
         let dragging_conn = canvas.dragging_connection.clone();
-        let selected_nodes: std::collections::HashSet<&str> = canvas
+        let selected_nodes: HashSet<&str> = canvas
             .graph
             .selected_nodes
             .iter()
             .map(|id| id.as_str())
             .collect();
-        let running_nodes: std::collections::HashSet<&str> =
+        let running_nodes: HashSet<&str> =
             canvas.running_nodes.iter().map(|id| id.as_str()).collect();
         let node_is_active = |node_id: &str| {
             running_nodes.contains(node_id)
@@ -463,7 +605,9 @@ impl NodeGraphRenderer {
         comment_refs.sort_by(|a, b| {
             let area_a = a.size.width * a.size.height;
             let area_b = b.size.width * b.size.height;
-            area_b.partial_cmp(&area_a).unwrap_or(std::cmp::Ordering::Equal)
+            area_b
+                .partial_cmp(&area_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         for comment in comment_refs {
@@ -504,6 +648,7 @@ impl NodeGraphRenderer {
 
         let mut node_instances: Vec<NodeInstance> = Vec::new();
         let mut pin_instances: Vec<PinInstance> = Vec::new();
+        let mut texture_preview_requests: Vec<PinPreviewRequest> = Vec::new();
         let mut text_calls: Vec<TextCall> = Vec::new();
 
         for node in &canvas.graph.nodes {
@@ -533,9 +678,8 @@ impl NodeGraphRenderer {
             };
             let sep = [0.086, 0.098, 0.116, 1.0];
 
-            let max_rows = node.inputs.len().max(node.outputs.len()).max(1);
             let gw = layout::snap_to_grid(node.size.width);
-            let gh = layout::snap_to_grid(layout::node_height_for_pin_rows(max_rows));
+            let gh = layout::snap_to_grid(node.size.height);
             let hdr_frac = (HEADER_H + SEP_H) / gh;
             let is_running = node_is_active(node.id.as_str());
             let flags = (is_reroute as u32) | ((is_sel as u32) << 1) | ((is_running as u32) << 2);
@@ -596,13 +740,17 @@ impl NodeGraphRenderer {
                             compatible: compat as u32,
                             _pad1: 0,
                         });
+
                         if !pin.name.is_empty() && !is_reroute {
                             let scr_x = (cgx + pan_x) * zoom;
                             let scr_y = (cgy + pan_y) * zoom;
-                            let lx = if is_input {
-                                scr_x + (PIN_SIZE * zoom * 0.5 + 5.0)
+                            let (lx, center) = if is_input {
+                                (scr_x + (PIN_SIZE * zoom * 0.5 + 5.0), false)
+                            } else if let Some((preview_pos, _)) = pin_preview_rect(node, i) {
+                                let preview_scr_x = (preview_pos[0] + pan_x) * zoom;
+                                (preview_scr_x - 64.0 * zoom, false)
                             } else {
-                                scr_x - (PIN_SIZE * zoom * 0.5 + 5.0)
+                                (scr_x - (PIN_SIZE * zoom * 0.5 + 5.0), true)
                             };
                             text_calls.push((
                                 pin.name.clone(),
@@ -610,11 +758,21 @@ impl NodeGraphRenderer {
                                 scr_y + PIN_FONT * zoom * 0.45,
                                 PIN_FONT * zoom,
                                 [0.78, 0.81, 0.87, 0.98],
-                                !is_input,
+                                center,
                             ));
                         }
-                    }
 
+                        if !is_input {
+                            if let Some((pos, size)) = pin_preview_rect(node, i) {
+                                texture_preview_requests.push(PinPreviewRequest {
+                                    cache_key: format!("{}:{}", node.id, pin.id),
+                                    node_id: node.id.clone(),
+                                    pin_id: pin.id.clone(),
+                                    instance: TexturePreviewInstance { pos, size },
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -626,13 +784,13 @@ impl NodeGraphRenderer {
         let mut wire_instances: Vec<WireInstance> = Vec::new();
         let half_thick = WIRE_THICKNESS * 0.5; // graph-space half-thickness; shader × zoom → px
 
-        let node_map: std::collections::HashMap<&str, &BlueprintNode> = canvas
+        let node_map: HashMap<&str, &BlueprintNode> = canvas
             .graph
             .nodes
             .iter()
             .map(|n| (n.id.as_str(), n))
             .collect();
-        let vis_ids: std::collections::HashSet<&str> = canvas
+        let vis_ids: HashSet<&str> = canvas
             .graph
             .nodes
             .iter()
@@ -830,7 +988,7 @@ impl NodeGraphRenderer {
                 // Paint: render GPU frame every frame.
                 move |_bounds, _pre, _window, cx| {
                     pe_paint.update(cx, |canvas, cx| {
-                        let Some(ref surface) = canvas.surface else {
+                        let Some(surface) = canvas.surface.clone() else {
                             return;
                         };
                         if surface.is_resize_pending() {
@@ -844,19 +1002,30 @@ impl NodeGraphRenderer {
                             viewport: [w as f32, h as f32],
                             ..uniforms
                         };
+                        let device = surface.device().clone();
+                        let queue = surface.queue().clone();
+                        let format = surface.format();
+                        let texture_previews = canvas.build_texture_previews(
+                            &texture_preview_requests,
+                            &device,
+                            &queue,
+                            anim_time,
+                            cx,
+                        );
                         canvas.renderer.render_frame(
-                                            surface.device(),
-                                            surface.queue(),
-                                            &view,
-                                            w,
-                                            h,
-                                            surface.format(),
-                                            &frame_uni,
-                                            &comment_instances,
-                                            &node_instances,
-                                            &wire_instances, // one struct per bezier connection
+                            &device,
+                            &queue,
+                            &view,
+                            w,
+                            h,
+                            format,
+                            &frame_uni,
+                            &comment_instances,
+                            &node_instances,
+                            &wire_instances, // one struct per bezier connection
                             &line_verts,     // selection box straight lines only
                             &pin_instances,
+                            &texture_previews,
                             &text_calls,
                         );
                         drop(view);
@@ -864,6 +1033,7 @@ impl NodeGraphRenderer {
                         if !canvas.running_nodes.is_empty()
                             || (canvas.wire_active_test_mode
                                 && !canvas.graph.selected_nodes.is_empty())
+                            || !texture_preview_requests.is_empty()
                         {
                             cx.notify();
                         }
@@ -877,60 +1047,60 @@ impl NodeGraphRenderer {
 
         // Wrap the canvas in drop area for palette items
         div().size_full().child(
-                div()
-                    .size_full()
-                    .relative()
-                    .overflow_hidden()
-                    .track_focus(&focus_handle)
-                    .key_context("BlueprintGraph")
-                    .child(gpu_display) // wgpu_surface() or dark placeholder — MUST be first
-                    .child(driver) // invisible canvas that drives GPU rendering
-                    // GPUI-only overlays (palette + context menus) sit on top
-                    .child(Self::render_quick_palette_overlay_inner(
-                        canvas.quick_palette_open,
-                        canvas.quick_palette_screen_pos,
-                        canvas.quick_palette_view.clone(),
-                        canvas.quick_palette_focus_pending,
-                        cx,
-                    ))
-                    .child(Self::render_node_context_menu(canvas, cx))
-                    .child(Self::render_pin_context_menu(canvas, cx))
-                    .child(Self::render_comment_title_editor(canvas, cx))
-                    // input
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        cx.listener(move |canvas, _, window, cx| {
-                            canvas.focus_handle().focus(window, cx);
-                        }),
-                    )
-                    .on_mouse_down(
-                        gpui::MouseButton::Right,
-                        crate::rendering::input::on_mouse_down_right(cx),
-                    )
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        crate::rendering::input::on_mouse_down_left(cx),
-                    )
-                    .on_mouse_move(crate::rendering::input::on_mouse_move(cx))
-                    .on_mouse_up(
-                        gpui::MouseButton::Left,
-                        crate::rendering::input::on_mouse_up_left(cx),
-                    )
-                    .on_mouse_up_out(
-                        gpui::MouseButton::Left,
-                        crate::rendering::input::on_mouse_up_left(cx),
-                    )
-                    .on_mouse_up(
-                        gpui::MouseButton::Right,
-                        crate::rendering::input::on_mouse_up_right(cx),
-                    )
-                    .on_mouse_up_out(
-                        gpui::MouseButton::Right,
-                        crate::rendering::input::on_mouse_up_right(cx),
-                    )
-                    .on_scroll_wheel(crate::rendering::input::on_scroll_wheel(cx))
-                    .on_key_down(crate::rendering::input::on_key_down(cx))
-            )
+            div()
+                .size_full()
+                .relative()
+                .overflow_hidden()
+                .track_focus(&focus_handle)
+                .key_context("BlueprintGraph")
+                .child(gpu_display) // wgpu_surface() or dark placeholder — MUST be first
+                .child(driver) // invisible canvas that drives GPU rendering
+                // GPUI-only overlays (palette + context menus) sit on top
+                .child(Self::render_quick_palette_overlay_inner(
+                    canvas.quick_palette_open,
+                    canvas.quick_palette_screen_pos,
+                    canvas.quick_palette_view.clone(),
+                    canvas.quick_palette_focus_pending,
+                    cx,
+                ))
+                .child(Self::render_node_context_menu(canvas, cx))
+                .child(Self::render_pin_context_menu(canvas, cx))
+                .child(Self::render_comment_title_editor(canvas, cx))
+                // input
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(move |canvas, _, window, cx| {
+                        canvas.focus_handle().focus(window, cx);
+                    }),
+                )
+                .on_mouse_down(
+                    gpui::MouseButton::Right,
+                    crate::rendering::input::on_mouse_down_right(cx),
+                )
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    crate::rendering::input::on_mouse_down_left(cx),
+                )
+                .on_mouse_move(crate::rendering::input::on_mouse_move(cx))
+                .on_mouse_up(
+                    gpui::MouseButton::Left,
+                    crate::rendering::input::on_mouse_up_left(cx),
+                )
+                .on_mouse_up_out(
+                    gpui::MouseButton::Left,
+                    crate::rendering::input::on_mouse_up_left(cx),
+                )
+                .on_mouse_up(
+                    gpui::MouseButton::Right,
+                    crate::rendering::input::on_mouse_up_right(cx),
+                )
+                .on_mouse_up_out(
+                    gpui::MouseButton::Right,
+                    crate::rendering::input::on_mouse_up_right(cx),
+                )
+                .on_scroll_wheel(crate::rendering::input::on_scroll_wheel(cx))
+                .on_key_down(crate::rendering::input::on_key_down(cx)),
+        )
     }
 
     fn render_quick_palette_overlay_inner(
@@ -1016,16 +1186,12 @@ impl NodeGraphRenderer {
                 .snap_to_window_with_margin(px(4.0))
                 .anchor(gpui::Corner::TopLeft)
                 .child(
-                    div()
-                        .occlude()
-                        .w(px(title_w))
-                        .h(px(title_h * 0.68))
-                        .child(
-                            ui::input::TextInput::new(&canvas.comment_text_input)
-                                .appearance(false)
-                                .bordered(false)
-                                .focus_bordered(false),
-                        ),
+                    div().occlude().w(px(title_w)).h(px(title_h * 0.68)).child(
+                        ui::input::TextInput::new(&canvas.comment_text_input)
+                            .appearance(false)
+                            .bordered(false)
+                            .focus_bordered(false),
+                    ),
                 ),
         )
         .with_priority(2)

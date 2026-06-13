@@ -34,6 +34,11 @@ impl PinDataType {
         }
     }
 
+    /// Whether this value can be previewed as a color/texture square in the graph.
+    pub fn is_texture_previewable(&self) -> bool {
+        matches!(self.type_name.as_str(), "vec4<f32>" | "vec3<f32>")
+    }
+
     /// The execution-flow pseudo-type (white triangle pins, not data-bearing).
     pub fn execution() -> Self {
         Self::from_type_str("execution")
@@ -168,7 +173,7 @@ pub enum NodeType {
     Logic,
     Math,
     Object,
-    Reroute,       // Visual pass-through node for organizing connections
+    Reroute, // Visual pass-through node for organizing connections
 }
 
 // ============================================================================
@@ -367,13 +372,10 @@ impl BlueprintNode {
             icon: definition.icon.clone(),
             node_type,
             position,
-            size: {
-                // Width: nodes are wide by default like UE
-                // Height: derived from pin count so the body fits snugly
-                let max_pins = inputs.len().max(outputs.len());
-                let height = layout::node_height_for_pin_rows(max_pins);
-                Size::new(240.0, height)
-            },
+            size: Size::new(
+                layout::node_width_for_pins(&outputs),
+                layout::node_height_for_pins(&inputs, &outputs),
+            ),
             inputs,
             outputs,
             properties: definition.properties.clone(),

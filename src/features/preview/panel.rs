@@ -22,6 +22,10 @@ pub struct MaterialPreviewPanel {
     needs_rebuild: bool,
     last_shader_source: Option<String>,
     compile_requested: bool,
+    /// Right mouse button is held over the viewport — drag orbits the
+    /// camera, and scroll zooms in/out while this is true.
+    orbiting: bool,
+    last_drag_pos: Option<Point<Pixels>>,
     subscriptions: Vec<Subscription>,
 }
 
@@ -41,7 +45,91 @@ impl MaterialPreviewPanel {
             needs_rebuild: true,
             last_shader_source: None,
             compile_requested: false,
+            orbiting: false,
+            last_drag_pos: None,
             subscriptions: Vec::new(),
+        }
+    }
+
+    fn on_orbit_mouse_down(
+        cx: &mut Context<Self>,
+    ) -> impl Fn(&MouseDownEvent, &mut Window, &mut App) {
+        let entity = cx.entity().clone();
+        move |event, _window, cx| {
+            entity.update(cx, |panel, cx| {
+                panel.orbiting = true;
+                panel.last_drag_pos = Some(event.position);
+                cx.notify();
+            });
+        }
+    }
+
+    fn on_orbit_mouse_move(
+        cx: &mut Context<Self>,
+    ) -> impl Fn(&MouseMoveEvent, &mut Window, &mut App) {
+        let entity = cx.entity().clone();
+        move |event, _window, cx| {
+            entity.update(cx, |panel, cx| {
+                if !panel.orbiting {
+                    return;
+                }
+                let Some(last) = panel.last_drag_pos else {
+                    return;
+                };
+
+                let dx = (event.position.x - last.x).to_f64() as f32;
+                let dy = (event.position.y - last.y).to_f64() as f32;
+                panel.last_drag_pos = Some(event.position);
+
+                const ORBIT_SENSITIVITY: f32 = 0.01;
+                if let Some(editor) = panel.editor.upgrade() {
+                    editor.update(cx, |ed, _cx| {
+                        let (yaw, pitch) = ed.preview_rotation;
+                        let new_yaw = yaw + dx * ORBIT_SENSITIVITY;
+                        let new_pitch =
+                            (pitch + dy * ORBIT_SENSITIVITY).clamp(-1.5, 1.5);
+                        ed.preview_rotation = (new_yaw, new_pitch);
+                    });
+                }
+                cx.notify();
+            });
+        }
+    }
+
+    fn on_orbit_mouse_up(
+        cx: &mut Context<Self>,
+    ) -> impl Fn(&MouseUpEvent, &mut Window, &mut App) {
+        let entity = cx.entity().clone();
+        move |_event, _window, cx| {
+            entity.update(cx, |panel, cx| {
+                panel.orbiting = false;
+                panel.last_drag_pos = None;
+                cx.notify();
+            });
+        }
+    }
+
+    fn on_orbit_scroll(
+        cx: &mut Context<Self>,
+    ) -> impl Fn(&ScrollWheelEvent, &mut Window, &mut App) {
+        let entity = cx.entity().clone();
+        move |event, _window, cx| {
+            entity.update(cx, |panel, cx| {
+                if !panel.orbiting {
+                    return;
+                }
+
+                let delta_y = match event.delta {
+                    ScrollDelta::Pixels(p) => p.y.to_f64() as f32,
+                    ScrollDelta::Lines(l) => l.y * 20.0,
+                };
+
+                const ZOOM_SENSITIVITY: f32 = 0.002;
+                let factor = (1.0 - delta_y * ZOOM_SENSITIVITY).clamp(0.5, 1.5);
+                let camera = &mut panel.renderer.camera;
+                camera.distance = (camera.distance * factor).clamp(0.2, 100.0);
+                cx.notify();
+            });
         }
     }
 
@@ -125,7 +213,7 @@ impl MaterialPreviewPanel {
             self.rebuild_surface(window, cx);
         }
 
-        if self.auto_rotate {
+        if self.auto_rotate && !self.orbiting {
             if let Some(editor) = self.editor.upgrade() {
                 let (yaw, pitch) = editor.read(cx).preview_rotation;
                 let new_yaw = yaw + self.auto_rotate_speed * 0.016;
@@ -207,6 +295,11 @@ impl MaterialPreviewPanel {
             .flex_1()
             .overflow_hidden()
             .bg(gpui::rgb(0x1a1a1a))
+            .on_mouse_down(MouseButton::Right, Self::on_orbit_mouse_down(cx))
+            .on_mouse_move(Self::on_orbit_mouse_move(cx))
+            .on_mouse_up(MouseButton::Right, Self::on_orbit_mouse_up(cx))
+            .on_mouse_up_out(MouseButton::Right, Self::on_orbit_mouse_up(cx))
+            .on_scroll_wheel(Self::on_orbit_scroll(cx))
             .child(gpu_display)
             .into_any_element()
     }

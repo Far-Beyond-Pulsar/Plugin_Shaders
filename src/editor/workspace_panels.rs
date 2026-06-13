@@ -8,15 +8,17 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use ui::{
     dock::{Panel, PanelEvent},
-    input::{InputEvent, InputState}, ActiveTheme,
+    input::{InputEvent, InputState},
+    ActiveTheme,
 };
 
 use crate::core::graph::BlueprintGraph;
 use crate::core::types::BlueprintNode;
-use crate::editor::panel::{ShaderEditorPanel, ResizeHandle};
+use crate::editor::panel::{ResizeHandle, ShaderEditorPanel};
 use crate::features::connections::operations::ConnectionDrag;
 use crate::features::preview::MaterialPreviewPanel;
 use crate::features::undo::UndoManager;
+use crate::rendering::gpu::PinPreviewRenderer;
 use crate::rendering::graph::NodeGraphRenderer;
 use crate::ui_components::palette_view::NodePaletteView;
 use crate::ui_components::properties::PropertiesRenderer;
@@ -224,10 +226,7 @@ pub struct PreviewPanel {
 }
 
 impl PreviewPanel {
-    pub fn new(
-        editor: WeakEntity<ShaderEditorPanel>,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    pub fn new(editor: WeakEntity<ShaderEditorPanel>, cx: &mut Context<Self>) -> Self {
         let preview = cx.new(|cx| MaterialPreviewPanel::new(editor.clone(), cx));
         Self {
             editor,
@@ -275,6 +274,14 @@ impl Panel for PreviewPanel {
 /// per-tab undo history, the GPU surface/renderer, and every piece of
 /// interaction state. The `panel` weak-ref is read-only access to shared data
 /// (library_manager) on the shell editor.
+pub struct PinPreviewCacheEntry {
+    pub graph_signature: u64,
+    pub shader_hash: u64,
+    pub renderer: PinPreviewRenderer,
+    pub texture: wgpu::Texture,
+    pub view: wgpu::TextureView,
+}
+
 pub struct GraphCanvasPanel {
     pub id: String,
     pub name: String,
@@ -293,6 +300,7 @@ pub struct GraphCanvasPanel {
     // ── GPU renderer (per-canvas) ──────────────────────────────────────────
     pub renderer: crate::rendering::gpu::BpRenderer,
     pub surface: Option<gpui::WgpuSurfaceHandle>,
+    pub pin_preview_cache: HashMap<String, PinPreviewCacheEntry>,
     pub canvas_origin: Rc<RefCell<Point<f32>>>,
     pub element_bounds: Option<Bounds<Pixels>>,
     pub graph_anim_start: std::time::Instant,
@@ -425,6 +433,7 @@ impl GraphCanvasPanel {
             focus_handle: cx.focus_handle(),
             renderer: crate::rendering::gpu::BpRenderer::new(),
             surface: None,
+            pin_preview_cache: HashMap::new(),
             canvas_origin: Rc::new(RefCell::new(Point::new(0.0, 0.0))),
             element_bounds: None,
             graph_anim_start: std::time::Instant::now(),
@@ -501,7 +510,12 @@ impl GraphCanvasPanel {
         value: serde_json::Value,
         cx: &mut Context<Self>,
     ) {
-        let Some(node) = self.graph.nodes.iter_mut().find(|n| n.id == node_id.as_ref()) else {
+        let Some(node) = self
+            .graph
+            .nodes
+            .iter_mut()
+            .find(|n| n.id == node_id.as_ref())
+        else {
             return;
         };
 
@@ -527,9 +541,7 @@ impl Render for GraphCanvasPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.refresh_comment_color_bindings(window, cx);
         crate::rendering::input::refresh_graph_cursor(window, self);
-        div()
-            .size_full()
-            .child(NodeGraphRenderer::render(self, cx))
+        div().size_full().child(NodeGraphRenderer::render(self, cx))
     }
 }
 
@@ -563,7 +575,10 @@ impl GraphCanvasPanel {
 
     fn snap_comment_size(size: gpui::Size<f32>) -> gpui::Size<f32> {
         let grid = 10.0;
-        gpui::Size::new((size.width / grid).round() * grid, (size.height / grid).round() * grid)
+        gpui::Size::new(
+            (size.width / grid).round() * grid,
+            (size.height / grid).round() * grid,
+        )
     }
 
     fn snap_comment_bounds(comment: &mut crate::core::types::BlueprintComment) {
@@ -572,39 +587,63 @@ impl GraphCanvasPanel {
         let r = ((comment.position.x + comment.size.width) / 10.0).round() * 10.0;
         let b = ((comment.position.y + comment.size.height) / 10.0).round() * 10.0;
         comment.position = Point::new(l, t);
-        comment.size = Self::snap_comment_size(gpui::Size::new((r - l).max(100.0), (b - t).max(50.0)));
+        comment.size =
+            Self::snap_comment_size(gpui::Size::new((r - l).max(100.0), (b - t).max(50.0)));
     }
 
-    pub(crate) fn refresh_comment_color_bindings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.comment_color_bindings_dirty { return; }
+    pub(crate) fn refresh_comment_color_bindings(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.comment_color_bindings_dirty {
+            return;
+        }
         self.subscriptions.clear();
         for comment in &self.graph.comments {
             if let Some(picker_state) = comment.color_picker_state.as_ref() {
                 let comment_id = comment.id.clone();
-                let sub = cx.subscribe_in(picker_state, window,
-                    move |this: &mut GraphCanvasPanel, _picker, event: &ui::color_picker::ColorPickerEvent, _window, cx| {
+                let sub = cx.subscribe_in(
+                    picker_state,
+                    window,
+                    move |this: &mut GraphCanvasPanel,
+                          _picker,
+                          event: &ui::color_picker::ColorPickerEvent,
+                          _window,
+                          cx| {
                         if let ui::color_picker::ColorPickerEvent::Change(Some(color)) = event {
-                            if let Some(c) = this.graph.comments.iter_mut().find(|c| c.id == comment_id) {
+                            if let Some(c) =
+                                this.graph.comments.iter_mut().find(|c| c.id == comment_id)
+                            {
                                 c.color = *color;
                                 this.is_dirty = true;
                                 cx.notify();
                             }
                         }
-                    });
+                    },
+                );
                 self.subscriptions.push(sub);
             }
         }
         self.comment_color_bindings_dirty = false;
     }
 
-    pub fn start_comment_drag(&mut self, comment_id: String, mouse_pos: Point<f32>, _cx: &mut Context<Self>) {
+    pub fn start_comment_drag(
+        &mut self,
+        comment_id: String,
+        mouse_pos: Point<f32>,
+        _cx: &mut Context<Self>,
+    ) {
         let Some(comment) = self.graph.comments.iter().find(|c| c.id == comment_id) else {
             return;
         };
 
         self.editing_comment = None;
         self.dragging_comment = Some(comment_id.clone());
-        self.drag_offset = Point::new(mouse_pos.x - comment.position.x, mouse_pos.y - comment.position.y);
+        self.drag_offset = Point::new(
+            mouse_pos.x - comment.position.x,
+            mouse_pos.y - comment.position.y,
+        );
         self.initial_drag_positions.clear();
         self.initial_comment_drag_positions.clear();
 
@@ -697,18 +736,24 @@ impl GraphCanvasPanel {
 
     pub fn update_comment_drag(&mut self, mouse_pos: Point<f32>, cx: &mut Context<Self>) {
         if let Some(cid) = &self.dragging_comment.clone() {
-            let raw = Point::new(mouse_pos.x - self.drag_offset.x, mouse_pos.y - self.drag_offset.y);
+            let raw = Point::new(
+                mouse_pos.x - self.drag_offset.x,
+                mouse_pos.y - self.drag_offset.y,
+            );
             let new_pos = self.snap_comment_position(raw);
             if let Some(ip) = self.initial_comment_drag_positions.get(cid) {
                 let delta = Point::new(new_pos.x - ip.x, new_pos.y - ip.y);
                 for (id, ip) in &self.initial_comment_drag_positions.clone() {
                     let np = self.snap_comment_position(Point::new(ip.x + delta.x, ip.y + delta.y));
-                    if let Some(c) = self.graph.comments.iter_mut().find(|c| c.id == *id) { c.position = np; }
+                    if let Some(c) = self.graph.comments.iter_mut().find(|c| c.id == *id) {
+                        c.position = np;
+                    }
                 }
                 for (id, ip) in &self.initial_drag_positions.clone() {
                     if let Some(n) = self.graph.nodes.iter_mut().find(|n| n.id == *id) {
                         n.position = crate::rendering::graph::NodeGraphRenderer::snap_to_grid(
-                            Point::new(ip.x + delta.x, ip.y + delta.y));
+                            Point::new(ip.x + delta.x, ip.y + delta.y),
+                        );
                     }
                 }
                 cx.notify();
@@ -716,7 +761,9 @@ impl GraphCanvasPanel {
         }
     }
 
-    pub fn end_comment_drag(&mut self, cx: &mut Context<Self>) { self.end_entity_drag(cx); }
+    pub fn end_comment_drag(&mut self, cx: &mut Context<Self>) {
+        self.end_entity_drag(cx);
+    }
 
     pub fn update_comment_resize(&mut self, mouse_pos: Point<f32>, cx: &mut Context<Self>) {
         use crate::editor::panel::ResizeHandle;
@@ -814,7 +861,8 @@ impl GraphCanvasPanel {
                 c.text = text;
                 self.is_dirty = true;
             }
-            self.editing_comment = None; cx.notify();
+            self.editing_comment = None;
+            cx.notify();
         }
     }
 
@@ -839,8 +887,17 @@ impl GraphCanvasPanel {
         self.add_comment(center, window, cx);
     }
 
-    pub fn add_comment(&mut self, position: Point<f32>, window: &mut Window, cx: &mut Context<Self>) {
-        let new_comment = crate::core::types::BlueprintComment::new(self.snap_comment_position(position), window, cx);
+    pub fn add_comment(
+        &mut self,
+        position: Point<f32>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let new_comment = crate::core::types::BlueprintComment::new(
+            self.snap_comment_position(position),
+            window,
+            cx,
+        );
         let mut cmd = crate::features::undo::AddCommentCommand::new(new_comment.clone());
         cmd.execute(self, cx);
         self.push_undo_command(crate::features::undo::Command::AddComment(cmd));
@@ -849,27 +906,76 @@ impl GraphCanvasPanel {
 
     pub fn copy_selected_entities(&mut self, _cx: &mut Context<Self>) {
         use crate::features::clipboard::ClipboardData;
-        if self.graph.selected_nodes.is_empty() && self.graph.selected_comments.is_empty() { return; }
-        let data = ClipboardData::from_selection(&self.graph.nodes, &self.graph.comments, &self.graph.connections, &self.graph.selected_nodes, &self.graph.selected_comments);
-        if let Ok(json) = data.to_json() { if let Ok(mut cb) = arboard::Clipboard::new() { let _ = cb.set_text(&json); } }
+        if self.graph.selected_nodes.is_empty() && self.graph.selected_comments.is_empty() {
+            return;
+        }
+        let data = ClipboardData::from_selection(
+            &self.graph.nodes,
+            &self.graph.comments,
+            &self.graph.connections,
+            &self.graph.selected_nodes,
+            &self.graph.selected_comments,
+        );
+        if let Ok(json) = data.to_json() {
+            if let Ok(mut cb) = arboard::Clipboard::new() {
+                let _ = cb.set_text(&json);
+            }
+        }
     }
 
     pub fn paste_entities(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         use crate::features::clipboard::ClipboardData;
-        let json = match arboard::Clipboard::new().ok().and_then(|mut cb| cb.get_text().ok()) { Some(t) => t, None => return };
-        let Ok(data) = ClipboardData::from_json(&json) else { return };
+        let json = match arboard::Clipboard::new()
+            .ok()
+            .and_then(|mut cb| cb.get_text().ok())
+        {
+            Some(t) => t,
+            None => return,
+        };
+        let Ok(data) = ClipboardData::from_json(&json) else {
+            return;
+        };
         let mwp = window.mouse_position();
-        let mep = crate::rendering::graph::NodeGraphRenderer::window_to_graph_element_pos(mwp, self);
+        let mep =
+            crate::rendering::graph::NodeGraphRenderer::window_to_graph_element_pos(mwp, self);
         let mgp = crate::rendering::graph::NodeGraphRenderer::screen_to_graph_pos(mep, &self.graph);
-        let mut mn_x = f32::MAX; let mut mn_y = f32::MAX; let mut mx_x = f32::MIN; let mut mx_y = f32::MIN;
-        for n in &data.nodes { mn_x = mn_x.min(n.position.0); mn_y = mn_y.min(n.position.1); mx_x = mx_x.max(n.position.0+n.size.0); mx_y = mx_y.max(n.position.1+n.size.1); }
-        for c in &data.comments { mn_x = mn_x.min(c.position.0); mn_y = mn_y.min(c.position.1); mx_x = mx_x.max(c.position.0+c.size.0); mx_y = mx_y.max(c.position.1+c.size.1); }
-        let off = if mn_x <= mx_x && mn_y <= mx_y { let sc = Point::new((mn_x+mx_x)/2.0,(mn_y+mx_y)/2.0); Point::new(mgp.x-sc.x, mgp.y-sc.y) } else { Point::new(50.0,50.0) };
+        let mut mn_x = f32::MAX;
+        let mut mn_y = f32::MAX;
+        let mut mx_x = f32::MIN;
+        let mut mx_y = f32::MIN;
+        for n in &data.nodes {
+            mn_x = mn_x.min(n.position.0);
+            mn_y = mn_y.min(n.position.1);
+            mx_x = mx_x.max(n.position.0 + n.size.0);
+            mx_y = mx_y.max(n.position.1 + n.size.1);
+        }
+        for c in &data.comments {
+            mn_x = mn_x.min(c.position.0);
+            mn_y = mn_y.min(c.position.1);
+            mx_x = mx_x.max(c.position.0 + c.size.0);
+            mx_y = mx_y.max(c.position.1 + c.size.1);
+        }
+        let off = if mn_x <= mx_x && mn_y <= mx_y {
+            let sc = Point::new((mn_x + mx_x) / 2.0, (mn_y + mx_y) / 2.0);
+            Point::new(mgp.x - sc.x, mgp.y - sc.y)
+        } else {
+            Point::new(50.0, 50.0)
+        };
         let (nodes, comments, conns) = data.to_graph_entities(off, window, cx);
-        self.graph.selected_nodes.clear(); self.graph.selected_comments.clear();
-        for n in &nodes { self.graph.nodes.push(n.clone()); self.graph.selected_nodes.push(n.id.clone()); }
-        for c in &comments { self.graph.comments.push(c.clone()); self.graph.selected_comments.push(c.id.clone()); }
-        for conn in &conns { self.graph.connections.push(conn.clone()); }
-        self.comment_color_bindings_dirty = true; cx.notify();
+        self.graph.selected_nodes.clear();
+        self.graph.selected_comments.clear();
+        for n in &nodes {
+            self.graph.nodes.push(n.clone());
+            self.graph.selected_nodes.push(n.id.clone());
+        }
+        for c in &comments {
+            self.graph.comments.push(c.clone());
+            self.graph.selected_comments.push(c.id.clone());
+        }
+        for conn in &conns {
+            self.graph.connections.push(conn.clone());
+        }
+        self.comment_color_bindings_dirty = true;
+        cx.notify();
     }
 }

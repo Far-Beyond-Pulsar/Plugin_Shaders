@@ -7,11 +7,10 @@ use crate::{
     PinType,
 };
 use gpui::*;
-use psgc::metadata::get_shader_nodes;
 use psgc::{
-    Connection as PsgcConnection, ConnectionType as PsgcConnectionType, GraphDescription,
-    NodeInstance, Pin as PsgcPin, PinInstance, PinType as PsgcPinType, Position, PropertyValue,
-    TypeInfo,
+    compile_fragment_shader, Connection as PsgcConnection, ConnectionType as PsgcConnectionType,
+    GraphDescription, NodeInstance, Pin as PsgcPin, PinInstance, PinType as PsgcPinType, Position,
+    PropertyValue, TypeInfo,
 };
 
 /// Convert our internal `PinDataType` (a free-form type-name string) into the
@@ -218,12 +217,64 @@ impl ShaderEditorPanel {
                 title,
                 icon,
                 node_type,
-                position: Point::new(node_instance.position.x as f32, node_instance.position.y as f32),
-                size: {
-                    let max_pins = node_instance.inputs.len().max(node_instance.outputs.len());
-                    let height = layout::node_height_for_pin_rows(max_pins);
-                    crate::Size::new(240.0, height)
-                },
+                position: Point::new(
+                    node_instance.position.x as f32,
+                    node_instance.position.y as f32,
+                ),
+                size: crate::Size::new(
+                    layout::node_width_for_pins(
+                        &node_instance
+                            .outputs
+                            .iter()
+                            .map(|pin_inst| {
+                                let pin = &pin_inst.pin;
+                                Pin {
+                                    id: pin_inst.id.clone(),
+                                    name: pin.name.clone(),
+                                    pin_type: match pin.pin_type {
+                                        PsgcPinType::Input => PinType::Input,
+                                        PsgcPinType::Output => PinType::Output,
+                                    },
+                                    data_type: psgc_data_type_to_pin_data_type(&pin.data_type),
+                                }
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                    layout::node_height_for_pins(
+                        &node_instance
+                            .inputs
+                            .iter()
+                            .map(|pin_inst| {
+                                let pin = &pin_inst.pin;
+                                Pin {
+                                    id: pin_inst.id.clone(),
+                                    name: pin.name.clone(),
+                                    pin_type: match pin.pin_type {
+                                        PsgcPinType::Input => PinType::Input,
+                                        PsgcPinType::Output => PinType::Output,
+                                    },
+                                    data_type: psgc_data_type_to_pin_data_type(&pin.data_type),
+                                }
+                            })
+                            .collect::<Vec<_>>(),
+                        &node_instance
+                            .outputs
+                            .iter()
+                            .map(|pin_inst| {
+                                let pin = &pin_inst.pin;
+                                Pin {
+                                    id: pin_inst.id.clone(),
+                                    name: pin.name.clone(),
+                                    pin_type: match pin.pin_type {
+                                        PsgcPinType::Input => PinType::Input,
+                                        PsgcPinType::Output => PinType::Output,
+                                    },
+                                    data_type: psgc_data_type_to_pin_data_type(&pin.data_type),
+                                }
+                            })
+                            .collect::<Vec<_>>(),
+                    ),
+                ),
                 inputs: node_instance
                     .inputs
                     .iter()
@@ -337,5 +388,110 @@ impl ShaderEditorPanel {
             pan_offset: Point::new(0.0, 0.0),
             virtualization_stats: crate::VirtualizationStats::default(),
         })
+    }
+
+    pub(crate) fn compile_preview_wgsl_for_pin(
+        &self,
+        graph: &BlueprintGraph,
+        node_id: &str,
+        pin_id: &str,
+    ) -> Result<String, String> {
+        let node = graph
+            .nodes
+            .iter()
+            .find(|node| node.id == node_id)
+            .ok_or_else(|| format!("Preview node '{}' not found", node_id))?;
+        let pin = node
+            .outputs
+            .iter()
+            .find(|pin| pin.id == pin_id)
+            .ok_or_else(|| format!("Preview pin '{}' not found on node '{}'", pin_id, node_id))?;
+
+        if !pin.data_type.is_texture_previewable() {
+            return Err(format!(
+                "Pin '{}.{}' is not texture-previewable ({})",
+                node_id, pin_id, pin.data_type
+            ));
+        }
+
+        let mut graph_desc = self.convert_graph_to_description(graph)?;
+        graph_desc.nodes.retain(|_, node| {
+            node.node_type != "fragment_output" && node.node_type != "vertex_output"
+        });
+        graph_desc.connections.retain(|connection| {
+            graph_desc.nodes.contains_key(&connection.source_node)
+                && graph_desc.nodes.contains_key(&connection.target_node)
+        });
+
+        let fragment_output = NodeDefinitions::load()
+            .get_node_definition("fragment_output")
+            .ok_or_else(|| "Missing fragment_output definition".to_string())?;
+        let color_input = fragment_output
+            .inputs
+            .iter()
+            .find(|input| input.id == "color")
+            .or_else(|| fragment_output.inputs.first())
+            .ok_or_else(|| "fragment_output has no inputs".to_string())?;
+
+        let preview_output_id = "__pin_preview_output__".to_string();
+        let mut output_node = NodeInstance::new(
+            preview_output_id.clone(),
+            "fragment_output",
+            Position { x: 0.0, y: 0.0 },
+        );
+        for input in &fragment_output.inputs {
+            output_node.inputs.push(PinInstance {
+                id: input.id.clone(),
+                pin: PsgcPin {
+                    id: input.id.clone(),
+                    name: input.name.clone(),
+                    pin_type: PsgcPinType::Input,
+                    data_type: pin_data_type_to_psgc(&input.data_type),
+                },
+            });
+        }
+        graph_desc.add_node(output_node);
+        graph_desc.add_connection(PsgcConnection::new(
+            node_id,
+            pin_id,
+            &preview_output_id,
+            &color_input.id,
+            PsgcConnectionType::Data,
+        ));
+
+        let mut wgsl = compile_fragment_shader(&graph_desc)
+            .map_err(|e| format!("Preview WGSL compilation failed: {}", e))?;
+        if matches!(pin.data_type.type_name.as_str(), "vec3<f32>") {
+            wgsl = wrap_vec3_preview_return(&wgsl)?;
+        }
+
+        Ok(wgsl)
+    }
+}
+
+fn wrap_vec3_preview_return(wgsl: &str) -> Result<String, String> {
+    let mut replaced = false;
+    let mut lines = Vec::new();
+
+    for line in wgsl.lines() {
+        let trimmed = line.trim_start();
+        if !replaced && trimmed.starts_with("return ") && trimmed.ends_with(';') {
+            let indent_len = line.len() - trimmed.len();
+            let indent = &line[..indent_len];
+            let expr = trimmed
+                .trim_start_matches("return ")
+                .trim_end_matches(';')
+                .trim();
+            lines.push(format!("{}return vec4<f32>({}, 1.0);", indent, expr));
+            replaced = true;
+        } else {
+            lines.push(line.to_string());
+        }
+    }
+
+    if replaced {
+        Ok(lines.join("\n"))
+    } else {
+        Err("Unable to adapt vec3 preview shader output".to_string())
     }
 }
