@@ -51,7 +51,6 @@ impl ToolbarRenderer {
             .tab_title
             .clone()
             .unwrap_or_else(|| "Shader Editor".to_string());
-        let bp_count = panel.breakpoints.len();
         let current_shader_model = panel.shader_model.clone();
         let current_preview_mesh = panel.preview_mesh;
         let preview_auto_rotate = panel.preview_auto_rotate;
@@ -261,28 +260,6 @@ impl ToolbarRenderer {
                     }),
             )
             .child(toolbar_separator(cx))
-            // ── Group 7 · Breakpoints ────────────────────────────────────────
-            .when(bp_count > 0, |el| {
-                el.child(toolbar_separator(cx)).child(
-                    h_flex()
-                        .gap_1p5()
-                        .items_center()
-                        .child(
-                            div()
-                                .px_2()
-                                .h_7()
-                                .flex()
-                                .items_center()
-                                .rounded(cx.theme().radius)
-                                .bg(gpui::rgba(0x4A0000FF))
-                                .border_1()
-                                .border_color(gpui::rgba(0xCC111144))
-                                .text_size(gpui::px(11.0))
-                                .text_color(gpui::rgba(0xFF6666FF))
-                                .child(format!("⏹ {}", bp_count)),
-                        ),
-                )
-            })
             // ── Flex spacer pushes right-side content to the edge ────────────
             .child(div().flex_1())
             // ── Right side · Compile status + Blueprint name pill ────────────

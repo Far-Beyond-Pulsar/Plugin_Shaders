@@ -895,7 +895,6 @@ impl NodeGraphRenderer {
                     ))
                     .child(Self::render_node_context_menu(canvas, cx))
                     .child(Self::render_pin_context_menu(canvas, cx))
-                    .child(Self::render_breakpoint_badges(canvas, cx))
                     .child(Self::render_comment_title_editor(canvas, cx))
                     // input
                     .on_mouse_down(
@@ -1039,118 +1038,6 @@ impl NodeGraphRenderer {
     // Lets the user add and remove interface pins (inputs / outputs) and reflects
     // changes immediately in the Macro Entry / Exit nodes and all instances.
 
-    // ── Breakpoint stop-sign badges ───────────────────────────────────────────
-    //
-    // For every node that has a breakpoint we render a small red octagon badge
-    // in its top-left corner.  The badge is a GPUI overlay element (not GPU
-    // shader) positioned using the same graph→screen coordinate transform used
-    // by the GPU renderer.
-
-    fn render_breakpoint_badges(
-        canvas: &GraphCanvasPanel,
-        cx: &mut Context<GraphCanvasPanel>,
-    ) -> AnyElement {
-        if canvas.breakpoints.is_empty() {
-            return div().into_any_element();
-        }
-
-        let origin = *canvas.canvas_origin.borrow();
-        let paused_node: Option<String> = None;
-
-        // Collect badge positions for all breakpointed nodes that are on screen.
-        let badges: Vec<(Point<Pixels>, bool)> = canvas
-            .graph
-            .nodes
-            .iter()
-            .filter(|n| canvas.breakpoints.contains(&n.id))
-            .map(|n| {
-                let scr = Self::graph_to_screen_pos(n.position, &canvas.graph);
-                let win = Point::new(
-                    px(scr.x + origin.x - 4.0), // slightly outside left edge
-                    px(scr.y + origin.y - 4.0), // slightly above top edge
-                );
-                let is_current = paused_node.as_deref() == Some(n.id.as_str());
-                (win, is_current)
-            })
-            .collect();
-
-        if badges.is_empty() {
-            return div().into_any_element();
-        }
-
-        let mut container = div();
-        for (pos, is_current) in badges {
-            let badge = deferred(
-                anchored()
-                    .position(pos)
-                    .anchor(gpui::Corner::TopLeft)
-                    .child(
-                        div()
-                            // Red octagon badge using a square with a colored border
-                            .w(px(18.0))
-                            .h(px(18.0))
-                            .rounded(px(3.0))
-                            .bg(if is_current {
-                                gpui::rgba(0xFF4400FF) // bright orange-red when active
-                            } else {
-                                gpui::rgba(0xCC1111FF) // darker red when inactive
-                            })
-                            .border_1()
-                            .border_color(gpui::rgba(0xFF8888FF))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .shadow_md()
-                            .child(
-                                div()
-                                    .text_size(px(10.0))
-                                    .text_color(gpui::white())
-                                    .font_weight(gpui::FontWeight::BOLD)
-                                    .child("⏹"),
-                            ),
-                    ),
-            )
-            .with_priority(3)
-            .into_any_element();
-            container = container.child(badge);
-        }
-
-        // Pulsing ring around the currently-paused node
-        if let Some(ref node_id) = paused_node {
-            if let Some(node) = canvas.graph.nodes.iter().find(|n| &n.id == node_id) {
-                let scr = Self::graph_to_screen_pos(node.position, &canvas.graph);
-                let w = node.size.width * canvas.graph.zoom_level;
-                let h = node.size.height * canvas.graph.zoom_level;
-                let ring_pos = Point::new(px(scr.x + origin.x - 2.0), px(scr.y + origin.y - 2.0));
-                let ring = deferred(
-                    anchored()
-                        .position(ring_pos)
-                        .anchor(gpui::Corner::TopLeft)
-                        .child(
-                            div()
-                                .w(px(w + 4.0))
-                                .h(px(h + 4.0))
-                                .rounded(px(8.0))
-                                .border_2()
-                                .border_color(gpui::rgba(0xFF440088))
-                                .shadow_lg(),
-                        ),
-                )
-                .with_priority(2)
-                .into_any_element();
-                container = container.child(ring);
-            }
-        }
-
-        container.into_any_element()
-    }
-
-    // ── Debug HUD ─────────────────────────────────────────────────────────────
-    //
-    // Shown at the bottom-centre of the graph canvas when a debug session is
-    // paused.  Displays the current frame's pin values and navigation controls.
-
-
     // ── Node context menu ─────────────────────────────────────────────────────
 
     fn render_node_context_menu(
@@ -1161,21 +1048,13 @@ impl NodeGraphRenderer {
             return div().into_any_element();
         };
         let node_id = node_id.clone();
-        let has_bp = canvas.has_breakpoint(&node_id);
-        let bp_label = if has_bp {
-            "Remove Breakpoint"
-        } else {
-            "Add Breakpoint  ⏹"
-        };
 
         let pe = cx.entity().clone();
         let pe2 = pe.clone();
         let pe3 = pe.clone();
-        let pe4 = pe.clone();
         let nid_dup = node_id.clone();
         let nid_copy = node_id.clone();
         let nid_del = node_id.clone();
-        let nid_bp = node_id.clone();
 
         deferred(
             anchored()
@@ -1192,27 +1071,6 @@ impl NodeGraphRenderer {
                         .shadow_lg()
                         .rounded(px(6.0))
                         .py(px(4.0))
-                        // ── Breakpoint section ─────────────────────────────────
-                        .child(Self::menu_item_colored(
-                            bp_label,
-                            if has_bp {
-                                gpui::rgba(0xFF9999FF)
-                            } else {
-                                gpui::rgba(0xFF6666FF)
-                            },
-                            cx,
-                            {
-                                let pe = pe4.clone();
-                                move |_, _, cx| {
-                                    pe.update(cx, |canvas, cx| {
-                                        canvas.toggle_breakpoint(nid_bp.clone(), cx);
-                                        canvas.node_context_menu = None;
-                                        cx.notify();
-                                    });
-                                }
-                            },
-                        ))
-                        .child(Self::menu_divider(cx))
                         // ── Standard edit actions ──────────────────────────────
                         .child(Self::menu_item("Duplicate Node", cx, {
                             let pe = pe.clone();
@@ -1322,23 +1180,6 @@ impl NodeGraphRenderer {
             .text_color(cx.theme().popover_foreground)
             .cursor_pointer()
             .hover(|s| s.bg(cx.theme().accent.opacity(0.12)))
-            .on_mouse_down(gpui::MouseButton::Left, handler)
-            .child(label.to_string())
-    }
-
-    fn menu_item_colored(
-        label: &str,
-        color: gpui::Rgba,
-        cx: &mut Context<GraphCanvasPanel>,
-        handler: impl Fn(&MouseDownEvent, &mut Window, &mut App) + 'static,
-    ) -> impl IntoElement {
-        div()
-            .px(px(12.0))
-            .py(px(6.0))
-            .text_sm()
-            .text_color(color)
-            .cursor_pointer()
-            .hover(|s| s.bg(gpui::rgba(0xFF000020)))
             .on_mouse_down(gpui::MouseButton::Left, handler)
             .child(label.to_string())
     }

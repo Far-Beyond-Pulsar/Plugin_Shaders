@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use ui::{
     dock::{Panel, PanelEvent},
-    h_flex, input::{InputEvent, InputState}, v_flex, ActiveTheme,
+    input::{InputEvent, InputState}, ActiveTheme,
 };
 
 use crate::core::graph::BlueprintGraph;
@@ -20,6 +20,7 @@ use crate::features::undo::UndoManager;
 use crate::rendering::graph::NodeGraphRenderer;
 use crate::ui_components::palette_view::NodePaletteView;
 use crate::ui_components::properties::PropertiesRenderer;
+use ui_common::reflected_properties_panel::PropertyStateManager;
 
 /// Compiler Panel
 pub struct CompilerPanel {
@@ -297,7 +298,6 @@ pub struct GraphCanvasPanel {
     pub graph_anim_start: std::time::Instant,
 
     pub running_nodes: HashSet<String>,
-    pub breakpoints: HashSet<String>,
     pub show_minimap: bool,
     pub show_graph_controls: bool,
     pub wire_active_test_mode: bool,
@@ -429,7 +429,6 @@ impl GraphCanvasPanel {
             element_bounds: None,
             graph_anim_start: std::time::Instant::now(),
             running_nodes: HashSet::new(),
-            breakpoints: HashSet::new(),
             show_minimap: true,
             show_graph_controls: true,
             wire_active_test_mode: false,
@@ -472,6 +471,7 @@ impl GraphCanvasPanel {
             last_comment_click_id: None,
             comment_text_input,
             comment_color_bindings_dirty: true,
+            pin_property_state: PropertyStateManager::new(),
             subscriptions: Vec::new(),
         }
     }

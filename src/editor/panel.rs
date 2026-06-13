@@ -172,10 +172,6 @@ pub struct ShaderEditorPanel {
     /// Right-clicked pin: (node_id, pin_id, window-space position)
     pub pin_context_menu: Option<(String, String, Point<Pixels>)>,
 
-    // ── Debugger ──────────────────────────────────────────────────────────────
-    /// Set of node IDs that have an active breakpoint.
-    pub breakpoints: HashSet<String>,
-
     // Shader model
     pub shader_model: String,
 
@@ -495,7 +491,6 @@ impl ShaderEditorPanel {
             bp_surface: None,
             node_context_menu: None,
             pin_context_menu: None,
-            breakpoints: HashSet::new(),
             shader_model: "Standard_unlit".to_string(),
             last_compiled_wgsl: None,
             preview_mesh: MeshType::Sphere,

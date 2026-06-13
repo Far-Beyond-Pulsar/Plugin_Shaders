@@ -285,10 +285,6 @@ pub fn on_mouse_down_left(
             if canvas.editing_comment.is_some() {
                 canvas.finish_comment_editing(cx);
             }
-            if canvas.variable_drop_menu_position.is_some() {
-                canvas.variable_drop_menu_position = None;
-                cx.notify();
-            }
 
             let cp = to_canvas(event.position, canvas);
             let gp = to_graph(cp, canvas);
@@ -618,9 +614,7 @@ pub fn on_key_down(
                 "escape" => {
                     canvas.node_context_menu = None;
                     canvas.pin_context_menu = None;
-                    if canvas.variable_drop_menu_position.is_some() {
-                        canvas.variable_drop_menu_position = None;
-                    } else if canvas.dragging_connection.is_some() {
+                    if canvas.dragging_connection.is_some() {
                         canvas.cancel_connection_drag(cx);
                     }
                     cx.notify();
@@ -643,23 +637,6 @@ pub fn on_key_down(
                 }
                 "y" if event.keystroke.modifiers.control => {
                     canvas.redo(cx);
-                }
-                "f9" => {
-                    if let Some(node_id) = canvas.graph.selected_nodes.first().cloned() {
-                        canvas.toggle_breakpoint(node_id, cx);
-                    }
-                }
-                "f5" if event.keystroke.modifiers.shift => {
-                    canvas.debug_stop(cx);
-                }
-                "f5" => {
-                    canvas.debug_continue(cx);
-                }
-                "f10" if event.keystroke.modifiers.shift => {
-                    canvas.debug_step_backward(cx);
-                }
-                "f10" => {
-                    canvas.debug_step_forward(cx);
                 }
                 _ => {}
             }
