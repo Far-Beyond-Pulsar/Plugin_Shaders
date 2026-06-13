@@ -7,6 +7,10 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 name = "shader_editor_plugin"
 
+[[example]]
+name = "standalone"
+path = "examples/standalone.rs"
+
 
 [dependencies]
 # UI dependencies (local paths so traits resolve to the same crate instance)
