@@ -120,12 +120,7 @@ impl PreviewRenderer {
         }
     }
 
-    pub fn initialize(
-        &mut self,
-        device: &Device,
-        queue: &Queue,
-        config: &SurfaceConfiguration,
-    ) {
+    pub fn initialize(&mut self, device: &Device, queue: &Queue, config: &SurfaceConfiguration) {
         self.device = Some(device.clone());
         self.queue = Some(queue.clone());
         self.surface_config = Some(config.clone());
@@ -155,8 +150,8 @@ impl PreviewRenderer {
 
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("preview pipeline layout"),
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: &[Some(&bind_group_layout)],
+            immediate_size: 0,
         });
 
         let bind_group = device.create_bind_group(&BindGroupDescriptor {
@@ -243,7 +238,7 @@ impl PreviewRenderer {
                 },
                 depth_stencil: None,
                 multisample: MultisampleState::default(),
-                multiview: None,
+                multiview_mask: None,
                 cache: None,
             });
             self.pipeline = Some(pipeline);
@@ -251,12 +246,7 @@ impl PreviewRenderer {
         self.needs_recompile = false;
     }
 
-    pub fn update_mesh(
-        &mut self,
-        vertices: &[PreviewVertex],
-        indices: &[u32],
-        index_count: u32,
-    ) {
+    pub fn update_mesh(&mut self, vertices: &[PreviewVertex], indices: &[u32], index_count: u32) {
         if let (Some(device), Some(queue)) = (&self.device, &self.queue) {
             let vertex_size = std::mem::size_of_val(vertices) as u64;
             let index_size = std::mem::size_of_val(indices) as u64;
@@ -291,11 +281,21 @@ impl PreviewRenderer {
     pub fn render(&self, output: &TextureView) {
         let Some(device) = &self.device else { return };
         let Some(queue) = &self.queue else { return };
-        let Some(pipeline) = &self.pipeline else { return };
-        let Some(uniform_buffer) = &self.uniform_buffer else { return };
-        let Some(bind_group) = &self.bind_group else { return };
-        let Some(vertex_buffer) = &self.mesh_vertex_buffer else { return };
-        let Some(index_buffer) = &self.mesh_index_buffer else { return };
+        let Some(pipeline) = &self.pipeline else {
+            return;
+        };
+        let Some(uniform_buffer) = &self.uniform_buffer else {
+            return;
+        };
+        let Some(bind_group) = &self.bind_group else {
+            return;
+        };
+        let Some(vertex_buffer) = &self.mesh_vertex_buffer else {
+            return;
+        };
+        let Some(index_buffer) = &self.mesh_index_buffer else {
+            return;
+        };
         if self.mesh_index_count == 0 {
             return;
         }
@@ -338,6 +338,7 @@ impl PreviewRenderer {
                 label: Some("preview render pass"),
                 color_attachments: &[Some(RenderPassColorAttachment {
                     view: output,
+                    depth_slice: None,
                     resolve_target: None,
                     ops: Operations {
                         load: LoadOp::Clear(Color {
@@ -352,6 +353,7 @@ impl PreviewRenderer {
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
+                multiview_mask: None,
             });
 
             rpass.set_pipeline(pipeline);

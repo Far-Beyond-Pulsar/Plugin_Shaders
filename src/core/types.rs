@@ -88,6 +88,17 @@ impl PinDataType {
         }
         self.type_name == other.type_name
     }
+
+    /// Resolve this pin's type against the reflection registry, for pins
+    /// whose value can be edited inline via a reflected property widget.
+    /// Returns `None` for execution and wildcard pins, or types with no
+    /// registered runtime reflection info.
+    pub fn runtime_type(&self) -> Option<&'static pulsar_reflection::RuntimeTypeInfo> {
+        if self.is_execution() || self.is_wildcard() {
+            return None;
+        }
+        pulsar_reflection::RUNTIME_TYPE_REGISTRY.get_by_name(&self.type_name)
+    }
 }
 
 impl std::fmt::Display for PinDataType {

@@ -16,6 +16,7 @@ ui      = { git = "https://github.com/Far-Beyond-Pulsar/WGPUI-Component", rev = 
 # Pulsar plugin system & shared UI
 plugin_editor_api = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "f413a294c1360d0e14c9c28e9d86b2f83596bc40" }
 ui_common          = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "f413a294c1360d0e14c9c28e9d86b2f83596bc40" }
+pulsar_reflection  = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "f413a294c1360d0e14c9c28e9d86b2f83596bc40" }
 
 # Shader compiler stack
 psgc   = { path = "/Users/tristanpoland/Documents/GitHub/PSGC/crates/psgc" }

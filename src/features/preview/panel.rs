@@ -19,7 +19,6 @@ pub struct MaterialPreviewPanel {
     pub auto_rotate: bool,
     pub auto_rotate_speed: f32,
     surface_handle: Option<gpui::WgpuSurfaceHandle>,
-    surface: Option<wgpu::Surface<'static>>,
     needs_rebuild: bool,
     last_shader_source: Option<String>,
     subscriptions: Vec<Subscription>,
@@ -38,7 +37,6 @@ impl MaterialPreviewPanel {
             auto_rotate: true,
             auto_rotate_speed: 0.5,
             surface_handle: None,
-            surface: None,
             needs_rebuild: true,
             last_shader_source: None,
             subscriptions: Vec::new(),
@@ -54,14 +52,17 @@ impl MaterialPreviewPanel {
             return;
         }
 
-        let Some(device) = self.renderer.device.as_ref() else { return };
-        let Some(queue) = self.renderer.queue.as_ref() else { return };
+        let Some(device) = self.renderer.device.clone() else { return };
+        let Some(queue) = self.renderer.queue.clone() else { return };
 
         let size = window.bounds().size;
-        let width = size.width.0.max(1.0) as u32;
-        let height = size.height.0.max(1.0) as u32;
+        let width = (size.width.to_f64() as u32).max(1);
+        let height = (size.height.to_f64() as u32).max(1);
 
-        let surface = window.create_wgpu_surface();
+        let Some(surface) = window.create_wgpu_surface(width, height, wgpu::TextureFormat::Bgra8Unorm) else {
+            return;
+        };
+
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: wgpu::TextureFormat::Bgra8Unorm,
@@ -72,13 +73,11 @@ impl MaterialPreviewPanel {
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
         };
-        surface.configure(device, &config);
 
-        self.renderer.initialize(device, queue, &config);
+        self.renderer.initialize(&device, &queue, &config);
         self.renderer.update_camera(width as f32 / height as f32);
 
-        self.surface = Some(surface);
-        self.surface_handle = None;
+        self.surface_handle = Some(surface);
         self.needs_rebuild = false;
     }
 
@@ -132,11 +131,10 @@ impl MaterialPreviewPanel {
             }
         }
 
-        if let Some(surface) = &self.surface {
-            if let Ok(frame) = surface.get_current_texture() {
-                let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        if let Some(surface) = &self.surface_handle {
+            if let Some(view) = surface.back_buffer_view() {
                 self.renderer.render(&view);
-                frame.present();
+                surface.present();
             }
         }
 

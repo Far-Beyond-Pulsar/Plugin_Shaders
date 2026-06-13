@@ -6624,6 +6624,7 @@ dependencies = [
  "parking_lot",
  "plugin_editor_api",
  "psgc",
+ "pulsar_reflection",
  "schemars",
  "serde",
  "serde_json",
