@@ -204,11 +204,15 @@ fn rgb_to_hsl(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
 // ============================================================================
 
 /// Attempt to parse content as legacy format
-pub fn try_parse_legacy_format(json: &str) -> Result<GraphDescription, String> {
-    let legacy_graph: LegacyGraphDescription = serde_json::from_str(json)
+///
+/// Legacy blueprint files used a fundamentally different node/component model
+/// that cannot be mapped onto the PSGC shader graph representation, so legacy
+/// files are recognized but loaded as an empty shader graph.
+pub fn try_parse_legacy_format(json: &str) -> Result<psgc::GraphDescription, String> {
+    let _legacy_graph: LegacyGraphDescription = serde_json::from_str(json)
         .map_err(|e| format!("Failed to parse as legacy format: {}", e))?;
 
-    Ok(legacy_graph.into())
+    Ok(psgc::GraphDescription::new("Shader Graph"))
 }
 
 /// Check if content appears to be in legacy format
