@@ -16,6 +16,20 @@ pub struct PreviewMeshData {
     pub index_count: u32,
 }
 
+impl PreviewMeshData {
+    /// Radius of the smallest sphere centered on the origin that contains
+    /// every vertex — used to frame the preview camera around the mesh.
+    pub fn bounding_radius(&self) -> f32 {
+        self.vertices
+            .iter()
+            .map(|v| {
+                let [x, y, z] = v.position;
+                (x * x + y * y + z * z).sqrt()
+            })
+            .fold(0.0f32, f32::max)
+    }
+}
+
 pub fn generate_sphere(radius: f32, sectors: u32, stacks: u32) -> PreviewMeshData {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();

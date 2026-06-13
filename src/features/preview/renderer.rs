@@ -480,11 +480,18 @@ impl PreviewRenderer {
         let view = self.camera.view_matrix();
         let proj = self.camera.projection_matrix();
 
+        // Column-major matrices (each inner array is a column, matching
+        // WGSL's `mat4x4<f32>` layout): for `clip = proj * (view * world)`,
+        // the combined matrix is `proj * view`, which in this storage
+        // convention is computed as `view[i][k] * proj[k][j]` — swapping the
+        // operands here previously produced `view * proj`, which put the
+        // camera transform backwards (looked like the camera was inside the
+        // mesh).
         let mut view_proj = [[0.0_f32; 4]; 4];
         for i in 0..4 {
             for j in 0..4 {
                 for k in 0..4 {
-                    view_proj[i][j] += proj[i][k] * view[k][j];
+                    view_proj[i][j] += view[i][k] * proj[k][j];
                 }
             }
         }

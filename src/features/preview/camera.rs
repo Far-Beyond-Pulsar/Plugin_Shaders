@@ -101,6 +101,26 @@ impl OrbitCamera {
         (r, up, fwd)
     }
 
+    /// Point the camera at the origin and pick a `distance` so that a sphere
+    /// of `radius` centered on the target fits comfortably inside the view
+    /// frustum, with a small margin so the mesh takes up a bit less than the
+    /// full frame.
+    pub fn frame_bounding_radius(&mut self, radius: f32) {
+        self.target = [0.0, 0.0, 0.0];
+
+        let tan_y = (self.fov_y * 0.5).tan();
+        let tan_x = tan_y * self.aspect;
+        // The tighter of the two axes determines how far back the camera
+        // needs to be to fit the whole mesh.
+        let tan_eff = tan_y.min(tan_x).max(0.0001);
+
+        // >1 leaves headroom around the mesh so it reads as "a bit less
+        // than the frame" rather than touching the edges exactly.
+        const FRAME_MARGIN: f32 = 1.25;
+
+        self.distance = radius / tan_eff * FRAME_MARGIN;
+    }
+
     pub fn projection_matrix(&self) -> [[f32; 4]; 4] {
         let f = 1.0 / (self.fov_y * 0.5).tan();
         let range_inv = 1.0 / (self.far - self.near);

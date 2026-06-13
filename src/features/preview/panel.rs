@@ -88,6 +88,9 @@ impl MaterialPreviewPanel {
         // clearing the surface, leaving it grey.
         let mesh_data = generate_mesh_data(self.current_mesh);
         self.renderer
+            .camera
+            .frame_bounding_radius(mesh_data.bounding_radius());
+        self.renderer
             .update_mesh(&mesh_data.vertices, &mesh_data.indices, mesh_data.index_count);
 
         self.surface_handle = Some(surface);
@@ -97,6 +100,9 @@ impl MaterialPreviewPanel {
     pub fn update_mesh(&mut self, mesh_type: MeshType) {
         self.current_mesh = mesh_type;
         let mesh_data = generate_mesh_data(mesh_type);
+        self.renderer
+            .camera
+            .frame_bounding_radius(mesh_data.bounding_radius());
         self.renderer
             .update_mesh(&mesh_data.vertices, &mesh_data.indices, mesh_data.index_count);
         self.needs_rebuild = true;
@@ -154,6 +160,16 @@ impl MaterialPreviewPanel {
         }
 
         if let Some(surface) = &self.surface_handle {
+            // The wgpu surface resizes itself to match its layout bounds
+            // independently of `rebuild_surface` — keep the camera's aspect
+            // ratio in sync every frame so the projection matches the
+            // surface's actual size instead of stretching to whatever size
+            // it was when the surface was first created.
+            let (width, height) = surface.size();
+            if height > 0 {
+                self.renderer.update_camera(width as f32 / height as f32);
+            }
+
             if let Some(view) = surface.back_buffer_view() {
                 self.renderer.render(&view);
                 surface.swap_buffers();
