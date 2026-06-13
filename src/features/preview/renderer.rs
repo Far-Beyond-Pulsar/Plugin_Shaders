@@ -257,17 +257,26 @@ impl PreviewRenderer {
         indices: &[u32],
         index_count: u32,
     ) {
-        if let Some(device) = &self.device {
-            let vertex_buffer = device.create_buffer_with_data(&BufferInitDescriptor {
+        if let (Some(device), Some(queue)) = (&self.device, &self.queue) {
+            let vertex_size = std::mem::size_of_val(vertices) as u64;
+            let index_size = std::mem::size_of_val(indices) as u64;
+
+            let vertex_buffer = device.create_buffer(&BufferDescriptor {
                 label: Some("preview vertex buffer"),
-                usage: BufferUsages::VERTEX,
-                contents: bytemuck::cast_slice(vertices),
+                size: vertex_size.max(1),
+                usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
             });
-            let index_buffer = device.create_buffer_with_data(&BufferInitDescriptor {
+            queue.write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(vertices));
+
+            let index_buffer = device.create_buffer(&BufferDescriptor {
                 label: Some("preview index buffer"),
-                usage: BufferUsages::INDEX,
-                contents: bytemuck::cast_slice(indices),
+                size: index_size.max(1),
+                usage: BufferUsages::INDEX | BufferUsages::COPY_DST,
+                mapped_at_creation: false,
             });
+            queue.write_buffer(&index_buffer, 0, bytemuck::cast_slice(indices));
+
             self.mesh_vertex_buffer = Some(vertex_buffer);
             self.mesh_index_buffer = Some(index_buffer);
             self.mesh_index_count = index_count;

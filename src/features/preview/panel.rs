@@ -2,7 +2,6 @@
 
 use gpui::*;
 use ui::dock::{Panel, PanelEvent};
-use ui::prelude::*;
 use ui::{
     button::{Button, ButtonVariants as _},
     h_flex, v_flex, ActiveTheme, IconName,
@@ -111,7 +110,7 @@ impl MaterialPreviewPanel {
         if self.auto_rotate {
             if let Some(editor) = self.editor.upgrade() {
                 let (yaw, pitch) = editor.read(cx).preview_rotation;
-                let new_yaw = yaw + self.auto_rotate_speed * cx.delta_time().as_secs_f32();
+                let new_yaw = yaw + self.auto_rotate_speed * 0.016;
                 editor.update(cx, |panel, _cx| {
                     panel.preview_rotation = (new_yaw, pitch);
                 });
@@ -124,14 +123,16 @@ impl MaterialPreviewPanel {
             self.renderer.camera.pitch = pitch;
         }
 
-        if let (Some(surface), Some(editor)) = (&self.surface, self.editor.upgrade()) {
-            let panel = editor.read(cx);
-            if let (Some(wgsl), Some(_), Some(_)) =
-                (&panel.last_compiled_wgsl, &self.renderer.device, &self.renderer.queue)
-            {
+        let wgsl_to_compile: Option<String> = self.editor.upgrade()
+            .and_then(|editor| editor.read(cx).last_compiled_wgsl.clone());
+
+        if let Some(ref wgsl) = wgsl_to_compile {
+            if self.renderer.device.is_some() && self.renderer.queue.is_some() {
                 self.update_shader(wgsl);
             }
+        }
 
+        if let Some(surface) = &self.surface {
             if let Ok(frame) = surface.get_current_texture() {
                 let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
                 self.renderer.render(&view);

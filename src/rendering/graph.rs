@@ -930,8 +930,8 @@ impl NodeGraphRenderer {
                         crate::rendering::input::on_mouse_up_right(cx),
                     )
                     .on_scroll_wheel(crate::rendering::input::on_scroll_wheel(cx))
-                    .on_key_down(crate::rendering::input::on_key_down(cx)),
-            ),
+                    .on_key_down(crate::rendering::input::on_key_down(cx))
+            )
     }
 
     fn render_quick_palette_overlay_inner(
