@@ -33,75 +33,12 @@ impl ShaderEditorPanel {
 
     /// Convert the active graph to a psgc::GraphDescription
     fn convert_graph_to_psgc(&self) -> Result<psgc::GraphDescription, String> {
-        use psgc::{Connection, ConnectionType, GraphDescription, NodeInstance, Pin, PinInstance, PinType, Position};
-
-        let mut graph = GraphDescription::new("Shader Graph");
         let main_tab = self.open_tabs
             .iter()
             .find(|t| t.is_main)
             .unwrap_or(&self.open_tabs[0]);
 
-        for bp_node in &main_tab.graph.nodes {
-            let mut inputs = Vec::new();
-            for pin in &bp_node.inputs {
-                inputs.push(PinInstance {
-                    id: pin.id.clone(),
-                    pin: Pin {
-                        name: pin.name.clone(),
-                        data_type: psgc::DataType::from_type_str(&pin.data_type.type_name),
-                        pin_type: PinType::Input,
-                    },
-                });
-            }
-
-            let mut outputs = Vec::new();
-            for pin in &bp_node.outputs {
-                outputs.push(PinInstance {
-                    id: pin.id.clone(),
-                    pin: Pin {
-                        name: pin.name.clone(),
-                        data_type: psgc::DataType::from_type_str(&pin.data_type.type_name),
-                        pin_type: PinType::Output,
-                    },
-                });
-            }
-
-            let mut properties = Vec::new();
-            for (k, v) in &bp_node.properties {
-                properties.push((k.clone(), v.clone()));
-            }
-
-            let node = NodeInstance {
-                id: bp_node.id.clone(),
-                node_type: bp_node.definition_id.clone(),
-                position: Position {
-                    x: bp_node.position.x as f64,
-                    y: bp_node.position.y as f64,
-                },
-                inputs,
-                outputs,
-                properties,
-            };
-
-            graph.nodes.insert(bp_node.id.clone(), node);
-        }
-
-        for conn in &main_tab.graph.connections {
-            let conn_type = match conn.connection_type {
-                ui::graph::ConnectionType::Execution => ConnectionType::Execution,
-                ui::graph::ConnectionType::Data => ConnectionType::Data,
-            };
-
-            graph.connections.push(Connection {
-                source_node: conn.source_node.clone(),
-                source_pin: conn.source_pin.clone(),
-                target_node: conn.target_node.clone(),
-                target_pin: conn.target_pin.clone(),
-                connection_type: conn_type,
-            });
-        }
-
-        Ok(graph)
+        self.convert_graph_to_description(&main_tab.graph)
     }
 
     /// Compile to WGSL via PSGC

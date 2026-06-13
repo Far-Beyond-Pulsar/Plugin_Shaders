@@ -20,6 +20,7 @@ ui_common          = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native
 # Shader compiler stack
 psgc   = { path = "/Users/tristanpoland/Documents/GitHub/PSGC/crates/psgc" }
 wgsl_std = { path = "/Users/tristanpoland/Documents/GitHub/PSGC/crates/wgsl_std" }
+graphy = { git = "https://github.com/Far-Beyond-Pulsar/Graphy.git", rev = "f8e8cae8daf47803a84ca9031f95eace4812e553" }
 # Utilities
 uuid = { version = "1.0", features = ["v4"] }
 smol = "2.0"

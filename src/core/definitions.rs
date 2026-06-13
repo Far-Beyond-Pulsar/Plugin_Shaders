@@ -74,7 +74,7 @@ impl NodeDefinitions {
     }
 
     fn from_shader_metadata(
-        metadata: Vec<psgc::graphy::core::NodeMetadata>,
+        metadata: Vec<graphy::core::NodeMetadata>,
     ) -> NodeDefinitions {
         let mut categories_map: HashMap<String, Vec<NodeDefinition>> = HashMap::new();
 

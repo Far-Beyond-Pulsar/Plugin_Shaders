@@ -10,8 +10,36 @@ use gpui::*;
 use psgc::metadata::get_shader_nodes;
 use psgc::{
     Connection as PsgcConnection, ConnectionType as PsgcConnectionType, GraphDescription,
-    NodeInstance, Pin as PsgcPin, PinInstance, PinType as PsgcPinType, Position,
+    NodeInstance, Pin as PsgcPin, PinInstance, PinType as PsgcPinType, Position, PropertyValue,
+    TypeInfo,
 };
+
+/// Convert our internal `PinDataType` (a free-form type-name string) into the
+/// psgc/graphy `DataType` representation used by the compiler.
+fn pin_data_type_to_psgc(data_type: &crate::core::types::PinDataType) -> psgc::DataType {
+    if data_type.is_execution() {
+        psgc::DataType::Execution
+    } else {
+        psgc::DataType::Typed(TypeInfo::new(data_type.type_name.clone()))
+    }
+}
+
+/// Convert a psgc/graphy `DataType` back into our internal `PinDataType`.
+fn psgc_data_type_to_pin_data_type(data_type: &psgc::DataType) -> crate::core::types::PinDataType {
+    match data_type {
+        psgc::DataType::Execution => crate::core::types::PinDataType::execution(),
+        psgc::DataType::Typed(info) => {
+            crate::core::types::PinDataType::from_type_str(info.type_string.clone())
+        }
+        psgc::DataType::Number => crate::core::types::PinDataType::from_type_str("f64"),
+        psgc::DataType::String => crate::core::types::PinDataType::from_type_str("String"),
+        psgc::DataType::Boolean => crate::core::types::PinDataType::from_type_str("bool"),
+        psgc::DataType::Vector2 => crate::core::types::PinDataType::from_type_str("Vec2"),
+        psgc::DataType::Vector3 => crate::core::types::PinDataType::from_type_str("Vec3"),
+        psgc::DataType::Color => crate::core::types::PinDataType::from_type_str("Color"),
+        psgc::DataType::Any => crate::core::types::PinDataType::wildcard(),
+    }
+}
 
 impl ShaderEditorPanel {
     /// Convert current blueprint graph to psgc GraphDescription
@@ -36,8 +64,8 @@ impl ShaderEditorPanel {
                 &bp_node.id,
                 &node_type,
                 Position {
-                    x: bp_node.position.x,
-                    y: bp_node.position.y,
+                    x: bp_node.position.x as f64,
+                    y: bp_node.position.y as f64,
                 },
             );
 
@@ -46,10 +74,10 @@ impl ShaderEditorPanel {
                 node_instance.inputs.push(PinInstance {
                     id: pin.id.clone(),
                     pin: PsgcPin {
+                        id: pin.id.clone(),
                         name: pin.name.clone(),
                         pin_type: PsgcPinType::Input,
-                        data_type: psgc::DataType::from_type_str(&pin.data_type.type_name),
-                        connected_to: Vec::new(),
+                        data_type: pin_data_type_to_psgc(&pin.data_type),
                     },
                 });
             }
@@ -59,10 +87,10 @@ impl ShaderEditorPanel {
                 node_instance.outputs.push(PinInstance {
                     id: pin.id.clone(),
                     pin: PsgcPin {
+                        id: pin.id.clone(),
                         name: pin.name.clone(),
                         pin_type: PsgcPinType::Output,
-                        data_type: psgc::DataType::from_type_str(&pin.data_type.type_name),
-                        connected_to: Vec::new(),
+                        data_type: pin_data_type_to_psgc(&pin.data_type),
                     },
                 });
             }
@@ -70,11 +98,11 @@ impl ShaderEditorPanel {
             // Convert properties
             for (key, value) in &bp_node.properties {
                 let prop_value = if let Ok(n) = value.parse::<f64>() {
-                    serde_json::json!(n)
+                    PropertyValue::Number(n)
                 } else if let Ok(b) = value.parse::<bool>() {
-                    serde_json::json!(b)
+                    PropertyValue::Boolean(b)
                 } else {
-                    serde_json::json!(value)
+                    PropertyValue::String(value.clone())
                 };
                 node_instance.set_property(key, prop_value);
             }
@@ -99,7 +127,6 @@ impl ShaderEditorPanel {
                 .unwrap_or(PsgcConnectionType::Data);
 
             let psgc_connection = PsgcConnection::new(
-                &connection.id,
                 &connection.source_node,
                 &connection.source_pin,
                 &connection.target_node,
@@ -113,13 +140,13 @@ impl ShaderEditorPanel {
         graph_desc.comments = graph
             .comments
             .iter()
-            .map(|c| psgc::BlueprintComment {
-                id: c.id.clone(),
+            .map(|c| graphy::core::GraphComment {
                 text: c.text.clone(),
-                position: (c.position.x, c.position.y),
-                size: (c.size.width, c.size.height),
-                color: [c.color.h, c.color.s, c.color.l, c.color.a],
-                contained_node_ids: c.contained_node_ids.clone(),
+                position: Position {
+                    x: c.position.x as f64,
+                    y: c.position.y as f64,
+                },
+                size: (c.size.width as f64, c.size.height as f64),
             })
             .collect();
 
@@ -191,7 +218,7 @@ impl ShaderEditorPanel {
                 title,
                 icon,
                 node_type,
-                position: Point::new(node_instance.position.x, node_instance.position.y),
+                position: Point::new(node_instance.position.x as f32, node_instance.position.y as f32),
                 size: {
                     let max_pins = node_instance.inputs.len().max(node_instance.outputs.len());
                     let height = layout::node_height_for_pin_rows(max_pins);
@@ -209,9 +236,7 @@ impl ShaderEditorPanel {
                                 PsgcPinType::Input => PinType::Input,
                                 PsgcPinType::Output => PinType::Output,
                             },
-                            data_type: crate::core::types::PinDataType::from_type_str(
-                                pin.data_type.to_string(),
-                            ),
+                            data_type: psgc_data_type_to_pin_data_type(&pin.data_type),
                         }
                     })
                     .collect(),
@@ -227,9 +252,7 @@ impl ShaderEditorPanel {
                                 PsgcPinType::Input => PinType::Input,
                                 PsgcPinType::Output => PinType::Output,
                             },
-                            data_type: crate::core::types::PinDataType::from_type_str(
-                                pin.data_type.to_string(),
-                            ),
+                            data_type: psgc_data_type_to_pin_data_type(&pin.data_type),
                         }
                     })
                     .collect(),
@@ -237,14 +260,13 @@ impl ShaderEditorPanel {
                     .properties
                     .iter()
                     .map(|(k, v)| {
-                        let value_str = if let Some(s) = v.as_str() {
-                            s.to_string()
-                        } else if let Some(n) = v.as_f64() {
-                            n.to_string()
-                        } else if let Some(b) = v.as_bool() {
-                            b.to_string()
-                        } else {
-                            v.to_string()
+                        let value_str = match v {
+                            PropertyValue::String(s) => s.clone(),
+                            PropertyValue::Number(n) => n.to_string(),
+                            PropertyValue::Boolean(b) => b.to_string(),
+                            PropertyValue::Vector2(x, y) => format!("{},{}", x, y),
+                            PropertyValue::Vector3(x, y, z) => format!("{},{},{}", x, y, z),
+                            PropertyValue::Color(r, g, b, a) => format!("{},{},{},{}", r, g, b, a),
                         };
                         (k.clone(), value_str)
                     })
@@ -259,12 +281,21 @@ impl ShaderEditorPanel {
         // Convert connections
         for connection in &graph_desc.connections {
             let bp_connection = Connection {
-                id: connection.id.clone(),
+                id: format!(
+                    "{}:{}->{}:{}",
+                    connection.source_node,
+                    connection.source_pin,
+                    connection.target_node,
+                    connection.target_pin
+                ),
                 source_node: connection.source_node.clone(),
                 source_pin: connection.source_pin.clone(),
                 target_node: connection.target_node.clone(),
                 target_pin: connection.target_pin.clone(),
-                connection_type: connection.connection_type.clone(),
+                connection_type: match connection.connection_type {
+                    PsgcConnectionType::Execution => ui::graph::ConnectionType::Execution,
+                    PsgcConnectionType::Data => ui::graph::ConnectionType::Data,
+                },
             };
             connections.push(bp_connection);
         }
@@ -275,21 +306,21 @@ impl ShaderEditorPanel {
             .iter()
             .map(|c| {
                 let color = Hsla {
-                    h: c.color[0],
-                    s: c.color[1],
-                    l: c.color[2],
-                    a: c.color[3],
+                    h: 0.5,
+                    s: 0.3,
+                    l: 0.2,
+                    a: 0.3,
                 };
                 let color_picker_state =
                     Some(cx.new(|cx| ui::color_picker::ColorPickerState::new(window, cx)));
 
                 BlueprintComment {
-                    id: c.id.clone(),
+                    id: uuid::Uuid::new_v4().to_string(),
                     text: c.text.clone(),
-                    position: Point::new(c.position.0, c.position.1),
-                    size: crate::Size::new(c.size.0, c.size.1),
+                    position: Point::new(c.position.x as f32, c.position.y as f32),
+                    size: crate::Size::new(c.size.0 as f32, c.size.1 as f32),
                     color,
-                    contained_node_ids: c.contained_node_ids.clone(),
+                    contained_node_ids: Vec::new(),
                     is_selected: false,
                     color_picker_state,
                 }

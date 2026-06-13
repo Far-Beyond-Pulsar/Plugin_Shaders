@@ -6619,6 +6619,7 @@ dependencies = [
  "fontdue",
  "futures",
  "gpui-ce",
+ "graphy",
  "log",
  "parking_lot",
  "plugin_editor_api",

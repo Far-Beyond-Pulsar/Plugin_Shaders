@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use ui::graph::{
-    BlueprintMetadata, GraphDescription, GraphViewState,
+    BlueprintMetadata, GraphViewState,
 };
 
 // ============================================================================
@@ -21,7 +21,7 @@ pub struct ShaderAsset {
     pub format_version: u32,
 
     /// The main shader graph for this shader
-    pub main_graph: GraphDescription,
+    pub main_graph: psgc::GraphDescription,
 
     /// Editor state (open tabs, view positions, etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -37,7 +37,7 @@ impl ShaderAsset {
     pub fn new() -> Self {
         Self {
             format_version: 1,
-            main_graph: GraphDescription::new("ShaderGraph"),
+            main_graph: psgc::GraphDescription::new("ShaderGraph"),
             editor_state: None,
             shader_metadata: BlueprintMetadata::default(),
         }
@@ -45,7 +45,7 @@ impl ShaderAsset {
 
     /// Create a shader asset from components
     pub fn from_components(
-        main_graph: GraphDescription,
+        main_graph: psgc::GraphDescription,
         editor_state: Option<ShaderEditorState>,
     ) -> Self {
         Self {
