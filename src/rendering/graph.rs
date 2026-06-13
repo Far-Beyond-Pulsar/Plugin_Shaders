@@ -13,6 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use crate::core::types::PinDataType as DataType;
 use gpui::prelude::*;
@@ -508,7 +509,12 @@ impl GraphCanvasPanel {
                 wgsl.hash(&mut hasher);
                 let shader_hash = hasher.finish();
                 let (texture, view) = ensure_preview_texture(device);
-                let renderer = PinPreviewRenderer::new(device, &wgsl);
+                let Ok(renderer) =
+                    catch_unwind(AssertUnwindSafe(|| PinPreviewRenderer::new(device, &wgsl)))
+                else {
+                    self.pin_preview_cache.remove(&request.cache_key);
+                    continue;
+                };
                 self.pin_preview_cache.insert(
                     request.cache_key.clone(),
                     PinPreviewCacheEntry {

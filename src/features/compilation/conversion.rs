@@ -464,9 +464,42 @@ impl ShaderEditorPanel {
         if matches!(pin.data_type.type_name.as_str(), "vec3<f32>") {
             wgsl = wrap_vec3_preview_return(&wgsl)?;
         }
+        if preview_wgsl_requires_external_resources(&wgsl) {
+            return Ok(unsupported_resource_preview_wgsl());
+        }
 
         Ok(wgsl)
     }
+}
+
+fn preview_wgsl_requires_external_resources(wgsl: &str) -> bool {
+    wgsl.contains("textureSample(")
+        || wgsl.contains("textureSampleLevel(")
+        || wgsl.contains("textureSampleGrad(")
+        || wgsl.contains("texture_2d<")
+        || wgsl.contains(": sampler")
+}
+
+fn unsupported_resource_preview_wgsl() -> String {
+    r#"struct Uniforms {
+    view_proj: mat4x4<f32>,
+    model: mat4x4<f32>,
+    time: f32,
+};
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
+@fragment
+fn fragment_main(
+    @builtin(position) frag_coord: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) world_pos: vec3<f32>,
+) -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+}
+"#
+    .to_string()
 }
 
 fn wrap_vec3_preview_return(wgsl: &str) -> Result<String, String> {
