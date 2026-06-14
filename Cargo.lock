@@ -5311,6 +5311,7 @@ dependencies = [
 [[package]]
 name = "psgc"
 version = "0.1.0"
+source = "git+https://github.com/Far-Beyond-Pulsar/PSGC?rev=c2650ed0aba111eb7e0c781c73d5933f1290e410#c2650ed0aba111eb7e0c781c73d5933f1290e410"
 dependencies = [
  "graphy",
  "serde",
@@ -8637,6 +8638,7 @@ dependencies = [
 [[package]]
 name = "wgsl_std"
 version = "0.1.0"
+source = "git+https://github.com/Far-Beyond-Pulsar/PSGC?rev=c2650ed0aba111eb7e0c781c73d5933f1290e410#c2650ed0aba111eb7e0c781c73d5933f1290e410"
 dependencies = [
  "graphy",
  "linkme",
