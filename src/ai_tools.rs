@@ -38,7 +38,7 @@ fn normalize_file_key(file_path: &Path) -> PathBuf {
     let candidate = if file_path
         .file_name()
         .and_then(|n| n.to_str())
-        .is_some_and(|n| n == "graph_save.json")
+        .is_some_and(|n| n == "shader_graph_save.json")
     {
         file_path.parent().unwrap_or(file_path).to_path_buf()
     } else {
@@ -153,7 +153,7 @@ fn is_blueprint_file(file_path: &Path) -> bool {
         || file_path
             .file_name()
             .and_then(|n| n.to_str())
-            .is_some_and(|n| n == "graph_save.json")
+            .is_some_and(|n| n == "shader_graph_save.json")
 }
 
 fn node_to_json(node: &BlueprintNode) -> Value {

@@ -10,7 +10,7 @@ use crate::editor::tabs::GraphTab;
 use gpui::*;
 use std::path::{Path, PathBuf};
 
-const GRAPH_SAVE_FILE_NAME: &str = "graph_save.json";
+const GRAPH_SAVE_FILE_NAME: &str = "shader_graph_save.json";
 
 impl ShaderEditorPanel {
     /// Save the current blueprint to its file path

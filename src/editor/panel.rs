@@ -282,7 +282,7 @@ impl ShaderEditorPanel {
         tracing::info!(
             ">>> new_with_path: file_path={:?}, graph_file={:?}",
             file_path,
-            file_path.join("graph_save.json"),
+            file_path.join("shader_graph_save.json"),
         );
 
         let mut panel = Self::new_internal(Some(file_path.clone()), window, cx);
@@ -294,8 +294,8 @@ impl ShaderEditorPanel {
             panel.current_material_path,
         );
 
-        // Blueprint classes are folders containing graph_save.json
-        let graph_file = file_path.join("graph_save.json");
+        // Blueprint classes are folders containing shader_graph_save.json
+        let graph_file = file_path.join("shader_graph_save.json");
 
         // Load the shader file
         if let Err(e) = panel.load_blueprint(graph_file.to_str().unwrap(), window, cx) {

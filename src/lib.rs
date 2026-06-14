@@ -90,7 +90,7 @@ impl EditorPlugin for ShaderEditorPlugin {
             icon: ui::IconName::Component,
             color: gpui::rgb(0x4CAF50).into(),
             structure: FileStructure::FolderBased {
-                marker_file: "graph_save.json".to_string(),
+                marker_file: "shader_shader_graph_save.json".to_string(),
                 template_structure: vec![],
             },
             default_content: json!({
