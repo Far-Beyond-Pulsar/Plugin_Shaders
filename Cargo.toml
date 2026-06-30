@@ -14,13 +14,13 @@ path = "examples/standalone.rs"
 
 [dependencies]
 # UI dependencies (local paths so traits resolve to the same crate instance)
-gpui-ce = { git = "https://github.com/Far-Beyond-Pulsar/WGPUI", rev = "2c1cd08bcf3dd380676b985fc0c14b84c3da2d39" }
-ui      = { git = "https://github.com/Far-Beyond-Pulsar/WGPUI-Component", rev = "c78ccad3154a34bf0ba16b9192aeb9374f2696c2" }
+gpui-ce = { git = "https://github.com/Far-Beyond-Pulsar/WGPUI", rev = "2abda4ffb8542aad150fa4ff9ebc7263997fd731" }
+ui      = { git = "https://github.com/Far-Beyond-Pulsar/WGPUI-Component", rev = "3f2168f6e04e6b1a16ad7352c85b32641e8c5afa" }
 
 # Pulsar plugin system & shared UI
-plugin_editor_api = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "f413a294c1360d0e14c9c28e9d86b2f83596bc40" }
-ui_common          = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "f413a294c1360d0e14c9c28e9d86b2f83596bc40" }
-pulsar_reflection  = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "f413a294c1360d0e14c9c28e9d86b2f83596bc40" }
+plugin_editor_api = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "62bb5c130603c3d823a3ee9633cc4c374bdd2733" }
+ui_common          = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "62bb5c130603c3d823a3ee9633cc4c374bdd2733" }
+pulsar_reflection  = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "62bb5c130603c3d823a3ee9633cc4c374bdd2733" }
 
 # Shader compiler stack
 psgc   = { git = "https://github.com/Far-Beyond-Pulsar/PSGC", rev = "c2650ed0aba111eb7e0c781c73d5933f1290e410" }
