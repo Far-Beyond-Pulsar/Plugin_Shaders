@@ -126,6 +126,88 @@ impl EditorPlugin for ShaderEditorPlugin {
         }]
     }
 
+    fn on_load(&mut self) {
+        crate::features::initialize_features();
+        log::info!("Shader Graph Editor Plugin loaded");
+    }
+}
+
+impl ShaderEditorPlugin {
+    fn create_shader_editor(
+        &'static self,
+        file_path: PathBuf,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Result<Arc<dyn PanelView>, PluginError> {
+        log::info!("Creating shader editor for {:?}", file_path);
+
+        let file_path_clone = file_path.clone();
+
+        let panel = cx.new(|cx| {
+            match ShaderEditorPanel::new_with_path(file_path_clone.clone(), window, cx) {
+                Ok(p) => {
+                    tracing::info!(
+                        "create_shader_editor: new_with_path succeeded, graph has {} nodes, current_material_path={:?}",
+                        p.graph.nodes.len(),
+                        p.current_material_path,
+                    );
+                    p
+                }
+                Err(e) => {
+                    tracing::error!("create_shader_editor: new_with_path FAILED: {}", e);
+                    let p = ShaderEditorPanel::new(window, cx);
+                    tracing::warn!(
+                        "create_shader_editor: fell back to empty panel, graph has {} nodes",
+                        p.graph.nodes.len(),
+                    );
+                    p
+                }
+            }
+        });
+
+        let graph_snapshot = panel.read(cx).graph.clone();
+        tracing::info!(
+            "create_shader_editor: AI session snapshot has {} nodes",
+            graph_snapshot.nodes.len(),
+        );
+        ai_tools::upsert_session(file_path.clone(), graph_snapshot);
+
+        let panel_arc: Arc<dyn ui::dock::PanelView> = Arc::new(panel.clone());
+
+        let id = {
+            let mut next_id = self.next_editor_id.lock().unwrap();
+            let id = *next_id;
+            *next_id += 1;
+            id
+        };
+
+        self.editors.lock().unwrap().insert(
+            id,
+            EditorStorage {
+                panel: panel_arc.clone(),
+            },
+        );
+
+        log::info!(
+            "Created shader editor instance {} for {:?}",
+            id,
+            file_path
+        );
+
+        Ok(panel_arc)
+    }
+}
+
+impl EditorPluginEditor for ShaderEditorPlugin {
+    fn register_editors(&'static self, registry: &mut EditorFactoryRegistry) {
+        registry.register_fn(EditorId::new("shader-editor"), |file_path, window, cx| {
+            self.create_shader_editor(file_path, window, cx)
+        });
+    }
+}
+
+impl EditorPluginStatusbar for ShaderEditorPlugin {}
+impl EditorPluginAi for ShaderEditorPlugin {
     fn ai_tools(&self) -> Vec<AiToolDefinition> {
         ai_tools::ai_tools()
     }
@@ -142,78 +224,14 @@ impl EditorPlugin for ShaderEditorPlugin {
     ) -> Result<serde_json::Value, PluginError> {
         ai_tools::execute_ai_tool(file_path, tool_name, tool_args)
     }
-
-    fn create_editor(
-        &self,
-        editor_id: EditorId,
-        file_path: PathBuf,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Result<Arc<dyn PanelView>, PluginError> {
-        log::info!("Creating shader editor with ID: {}", editor_id.as_str());
-
-        if editor_id.as_str() == "shader-editor" {
-            let file_path_clone = file_path.clone();
-
-            let panel = cx.new(|cx| {
-                match ShaderEditorPanel::new_with_path(file_path_clone.clone(), window, cx) {
-                    Ok(p) => {
-                        tracing::info!(
-                            "create_editor: new_with_path succeeded, graph has {} nodes, current_material_path={:?}",
-                            p.graph.nodes.len(),
-                            p.current_material_path,
-                        );
-                        p
-                    }
-                    Err(e) => {
-                        tracing::error!("create_editor: new_with_path FAILED: {}", e);
-                        let p = ShaderEditorPanel::new(window, cx);
-                        tracing::warn!(
-                            "create_editor: fell back to empty panel, graph has {} nodes",
-                            p.graph.nodes.len(),
-                        );
-                        p
-                    }
-                }
-            });
-
-            let graph_snapshot = panel.read(cx).graph.clone();
-            tracing::info!(
-                "create_editor: AI session snapshot has {} nodes",
-                graph_snapshot.nodes.len(),
-            );
-            ai_tools::upsert_session(file_path.clone(), graph_snapshot);
-
-            let panel_arc: Arc<dyn ui::dock::PanelView> = Arc::new(panel.clone());
-
-            let id = {
-                let mut next_id = self.next_editor_id.lock().unwrap();
-                let id = *next_id;
-                *next_id += 1;
-                id
-            };
-
-            self.editors.lock().unwrap().insert(
-                id,
-                EditorStorage {
-                    panel: panel_arc.clone(),
-                },
-            );
-
-            log::info!(
-                "Created shader editor instance {} for {:?}",
-                id,
-                file_path
-            );
-
-            Ok(panel_arc)
-        } else {
-            Err(PluginError::EditorNotFound { editor_id })
-        }
+}
+impl EditorPluginComponents for ShaderEditorPlugin {
+    fn component_definitions(&self) -> Vec<ComponentDefinition> {
+        Vec::new()
     }
-
-    fn on_load(&mut self) {
-        crate::features::initialize_features();
-        log::info!("Shader Graph Editor Plugin loaded");
+}
+impl EditorPluginSubsystems for ShaderEditorPlugin {
+    fn subsystems(&self) -> Vec<Box<dyn Subsystem>> {
+        Vec::new()
     }
 }
