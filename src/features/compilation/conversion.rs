@@ -10,7 +10,6 @@ use gpui::*;
 use psgc::{
     compile_fragment_shader, Connection as PsgcConnection, ConnectionType as PsgcConnectionType,
     GraphDescription, NodeInstance, Pin as PsgcPin, PinInstance, PinType as PsgcPinType, Position,
-    PropertyValue, TypeInfo,
 };
 
 /// Convert our internal `PinDataType` (a free-form type-name string) into the
