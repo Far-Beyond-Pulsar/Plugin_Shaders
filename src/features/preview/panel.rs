@@ -166,6 +166,7 @@ impl MaterialPreviewPanel {
             desired_maximum_frame_latency: 2,
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: vec![],
+            color_space: wgpu::SurfaceColorSpace::Auto,
         };
 
         self.renderer.initialize(&device, &queue, &config);
