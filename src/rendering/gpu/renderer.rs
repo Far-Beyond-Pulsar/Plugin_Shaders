@@ -451,7 +451,7 @@ impl BpRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[vbl],
+                buffers: &[Some(vbl)],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -564,7 +564,7 @@ impl BpRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[vbl],
+                buffers: &[Some(vbl)],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -636,7 +636,7 @@ impl BpRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[vbl],
+                buffers: &[Some(vbl)],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -700,7 +700,7 @@ impl BpRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[vbl],
+                buffers: &[Some(vbl)],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -787,7 +787,7 @@ impl BpRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[vbl],
+                buffers: &[Some(vbl)],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -868,7 +868,7 @@ impl BpRenderer {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[vbl],
+                buffers: &[Some(vbl)],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {

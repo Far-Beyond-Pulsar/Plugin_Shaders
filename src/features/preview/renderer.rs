@@ -375,7 +375,7 @@ impl PreviewRenderer {
                     module: &vs_module,
                     entry_point: Some("vertex_main"),
                     compilation_options: PipelineCompilationOptions::default(),
-                    buffers: &[VertexBufferLayout {
+                    buffers: &[Some(VertexBufferLayout {
                         array_stride: std::mem::size_of::<PreviewVertex>() as u64,
                         step_mode: VertexStepMode::Vertex,
                         attributes: &[
@@ -395,7 +395,7 @@ impl PreviewRenderer {
                                 shader_location: 2,
                             },
                         ],
-                    }],
+                    })],
                 },
                 fragment: Some(FragmentState {
                     module: &fs_module,
