@@ -10,33 +10,25 @@ use gpui::*;
 use psgc::{
     compile_fragment_shader, Connection as PsgcConnection, ConnectionType as PsgcConnectionType,
     GraphDescription, NodeInstance, Pin as PsgcPin, PinInstance, PinType as PsgcPinType, Position,
-    PropertyValue, TypeInfo,
 };
 
 /// Convert our internal `PinDataType` (a free-form type-name string) into the
 /// psgc/graphy `DataType` representation used by the compiler.
 fn pin_data_type_to_psgc(data_type: &crate::core::types::PinDataType) -> psgc::DataType {
     if data_type.is_execution() {
-        psgc::DataType::Execution
+        psgc::DataType::Exec
     } else {
-        psgc::DataType::Typed(TypeInfo::new(data_type.type_name.clone()))
+        psgc::DataType::typed(data_type.type_name.clone())
     }
 }
 
 /// Convert a psgc/graphy `DataType` back into our internal `PinDataType`.
 fn psgc_data_type_to_pin_data_type(data_type: &psgc::DataType) -> crate::core::types::PinDataType {
     match data_type {
-        psgc::DataType::Execution => crate::core::types::PinDataType::execution(),
-        psgc::DataType::Typed(info) => {
+        psgc::DataType::Exec => crate::core::types::PinDataType::execution(),
+        psgc::DataType::Data(info) => {
             crate::core::types::PinDataType::from_type_str(info.type_string.clone())
         }
-        psgc::DataType::Number => crate::core::types::PinDataType::from_type_str("f64"),
-        psgc::DataType::String => crate::core::types::PinDataType::from_type_str("String"),
-        psgc::DataType::Boolean => crate::core::types::PinDataType::from_type_str("bool"),
-        psgc::DataType::Vector2 => crate::core::types::PinDataType::from_type_str("Vec2"),
-        psgc::DataType::Vector3 => crate::core::types::PinDataType::from_type_str("Vec3"),
-        psgc::DataType::Color => crate::core::types::PinDataType::from_type_str("Color"),
-        psgc::DataType::Any => crate::core::types::PinDataType::wildcard(),
     }
 }
 
@@ -96,12 +88,12 @@ impl ShaderEditorPanel {
 
             // Convert properties
             for (key, value) in &bp_node.properties {
-                let prop_value = if let Ok(n) = value.parse::<f64>() {
-                    PropertyValue::Number(n)
+                let prop_value: serde_json::Value = if let Ok(n) = value.parse::<f64>() {
+                    serde_json::json!(n)
                 } else if let Ok(b) = value.parse::<bool>() {
-                    PropertyValue::Boolean(b)
+                    serde_json::json!(b)
                 } else {
-                    PropertyValue::String(value.clone())
+                    serde_json::json!(value)
                 };
                 node_instance.set_property(key, prop_value);
             }
@@ -312,12 +304,12 @@ impl ShaderEditorPanel {
                     .iter()
                     .map(|(k, v)| {
                         let value_str = match v {
-                            PropertyValue::String(s) => s.clone(),
-                            PropertyValue::Number(n) => n.to_string(),
-                            PropertyValue::Boolean(b) => b.to_string(),
-                            PropertyValue::Vector2(x, y) => format!("{},{}", x, y),
-                            PropertyValue::Vector3(x, y, z) => format!("{},{},{}", x, y, z),
-                            PropertyValue::Color(r, g, b, a) => format!("{},{},{},{}", r, g, b, a),
+                            serde_json::Value::String(s) => s.clone(),
+                            serde_json::Value::Number(n) => n.to_string(),
+                            serde_json::Value::Bool(b) => b.to_string(),
+                            serde_json::Value::Null => String::new(),
+                            serde_json::Value::Array(arr) => format!("{:?}", arr),
+                            serde_json::Value::Object(obj) => format!("{:?}", obj),
                         };
                         (k.clone(), value_str)
                     })

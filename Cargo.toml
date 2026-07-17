@@ -14,17 +14,17 @@ path = "examples/standalone.rs"
 
 [dependencies]
 # UI dependencies (local paths so traits resolve to the same crate instance)
-gpui-ce = { git = "https://github.com/Far-Beyond-Pulsar/WGPUI", rev = "31fbf35800b4cfc2ddf202a1c16a2971251ca84c" }
-ui      = { git = "https://github.com/Far-Beyond-Pulsar/WGPUI-Component", rev = "eda5213258be50bf5a9556ff9a68221bd5f449cd" }
+gpui-ce = { git = "https://github.com/Far-Beyond-Pulsar/WGPUI", rev = "98e312efa8601b1244215c79aac88acb5e169e03" }
+ui      = { git = "https://github.com/Far-Beyond-Pulsar/WGPUI-Component", rev = "ccbab31e4e2364ef52efcb61c98c37a5d8cc79e1", features = ["tree-sitter-languages"] }
 
 # Pulsar plugin system & shared UI
-plugin_editor_api = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "62bb5c130603c3d823a3ee9633cc4c374bdd2733" }
-ui_common          = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "62bb5c130603c3d823a3ee9633cc4c374bdd2733" }
-pulsar_reflection  = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "62bb5c130603c3d823a3ee9633cc4c374bdd2733" }
+plugin_editor_api = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "f91bbba2b90ebad0afa6b9940ecd52da0430e326" }
+ui_common          = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "f91bbba2b90ebad0afa6b9940ecd52da0430e326" }
+pulsar_reflection  = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "f91bbba2b90ebad0afa6b9940ecd52da0430e326" }
 
 # Shader compiler stack
-psgc   = { git = "https://github.com/Far-Beyond-Pulsar/PSGC", rev = "c2650ed0aba111eb7e0c781c73d5933f1290e410" }
-wgsl_std = { git = "https://github.com/Far-Beyond-Pulsar/PSGC", rev = "c2650ed0aba111eb7e0c781c73d5933f1290e410" }
+psgc   = { git = "https://github.com/Far-Beyond-Pulsar/PSGC", rev = "85c4bb048cd945f7acdca074159fb7230935b636" }
+wgsl_std = { git = "https://github.com/Far-Beyond-Pulsar/PSGC", rev = "85c4bb048cd945f7acdca074159fb7230935b636" }
 graphy = { git = "https://github.com/Far-Beyond-Pulsar/Graphy.git", rev = "f8e8cae8daf47803a84ca9031f95eace4812e553" }
 # Utilities
 uuid = { version = "1.0", features = ["v4"] }
