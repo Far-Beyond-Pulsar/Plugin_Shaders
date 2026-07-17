@@ -53,9 +53,10 @@ fn hit_output_pin(cp: Point<f32>, canvas: &GraphCanvasPanel) -> Option<(String, 
     for node in &canvas.graph.nodes {
         for (i, pin) in node.outputs.iter().enumerate() {
             let c = NodeGraphRenderer::pin_canvas_pos(node, false, i, &canvas.graph);
-            // Reroute nodes use a larger hit area matching the full circle body.
             let r = if node.node_type == NodeType::Reroute {
-                (node.size.width.max(node.size.height) * 0.5 * canvas.graph.zoom_level).max(12.0)
+                // Inner 40 % of the reroute circle — small pin grab area.
+                // The outer ring is left for node-drag via hit_node.
+                (node.size.width.max(node.size.height) * 0.5 * canvas.graph.zoom_level) * 0.4
             } else {
                 (PIN_SIZE * canvas.graph.zoom_level * 0.9).max(6.0)
             };
@@ -86,9 +87,9 @@ fn hit_input_pin(
             if !can_connect {
                 continue;
             }
-            // Reroute nodes get a larger hit area matching the full circle body.
+            // Reroute: inner 40 % for pin-grab; outer ring left for node-drag.
             let r = if node.node_type == NodeType::Reroute {
-                (node.size.width.max(node.size.height) * 0.5 * canvas.graph.zoom_level).max(12.0)
+                (node.size.width.max(node.size.height) * 0.5 * canvas.graph.zoom_level) * 0.4
             } else {
                 (PIN_SIZE * canvas.graph.zoom_level * 1.3).max(8.0)
             };
