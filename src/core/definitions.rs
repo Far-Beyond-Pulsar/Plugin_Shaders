@@ -121,14 +121,27 @@ impl NodeDefinitions {
                 });
             }
 
-            // Add return type output
-            if let Some(return_type) = &node_meta.return_type {
+            // Add output pins from multi-output params (Break / Make).
+            for out in &node_meta.output_params {
                 outputs.push(PinDefinition {
-                    id: "result".to_string(),
-                    name: "result".to_string(),
-                    data_type: PinDataType::from_type_str(&return_type.type_string),
+                    id: out.name.clone(),
+                    name: out.name.clone(),
+                    data_type: PinDataType::from_type_str(&out.param_type),
                     pin_type: PinType::Output,
                 });
+            }
+
+            // If no output_params were declared, fall back to a single
+            // "result" pin from return_type (the legacy single-output case).
+            if node_meta.output_params.is_empty() {
+                if let Some(return_type) = &node_meta.return_type {
+                    outputs.push(PinDefinition {
+                        id: "result".to_string(),
+                        name: "result".to_string(),
+                        data_type: PinDataType::from_type_str(&return_type.type_string),
+                        pin_type: PinType::Output,
+                    });
+                }
             }
 
             let category = node_meta.category.clone();
