@@ -495,9 +495,30 @@ fn fragment_main(
 }
 
 fn wrap_vec3_preview_return(wgsl: &str) -> Result<String, String> {
+    // The codegen now emits `return FragmentOutput(base_color, metallic, …)`
+    // — wrap the first struct argument in `vec4<f32>(..., 1.0)` so a vec3
+    // node output works with the vec4 base_color field.
+    let output_struct = "FragmentOutput(";
+    if let Some(pos) = wgsl.rfind(output_struct) {
+        let before = &wgsl[..pos];
+        let after = &wgsl[pos + output_struct.len()..];
+        // Find the first comma-separated argument
+        if let Some(comma) = after.find(',') {
+            let first_arg = after[..comma].trim();
+            return Ok(format!(
+                "{}return vec4<f32>({}, 1.0){}",
+                before, first_arg, &after[comma..]
+            ));
+        }
+        // Single-value struct (shouldn't happen with current PBR output,
+        // but handle gracefully)
+        let trimmed = after.trim_end_matches(')').trim_end_matches(';').trim();
+        return Ok(format!("{}return vec4<f32>({}, 1.0);", before, trimmed));
+    }
+
+    // Fallback: try the old `return <expr>;` pattern
     let mut replaced = false;
     let mut lines = Vec::new();
-
     for line in wgsl.lines() {
         let trimmed = line.trim_start();
         if !replaced && trimmed.starts_with("return ") && trimmed.ends_with(';') {
@@ -507,11 +528,14 @@ fn wrap_vec3_preview_return(wgsl: &str) -> Result<String, String> {
                 .trim_start_matches("return ")
                 .trim_end_matches(';')
                 .trim();
-            lines.push(format!("{}return vec4<f32>({}, 1.0);", indent, expr));
-            replaced = true;
-        } else {
-            lines.push(line.to_string());
+            // Skip if expression is already vec4
+            if !expr.starts_with("vec4<f32>") {
+                lines.push(format!("{}return vec4<f32>({}, 1.0);", indent, expr));
+                replaced = true;
+                continue;
+            }
         }
+        lines.push(line.to_string());
     }
 
     if replaced {

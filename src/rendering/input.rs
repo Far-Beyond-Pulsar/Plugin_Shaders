@@ -75,7 +75,11 @@ fn hit_input_pin(
             continue;
         }
         for (i, pin) in node.inputs.iter().enumerate() {
-            if !src_type.is_compatible_with(&pin.data_type) {
+            let can_connect = src_type.is_compatible_with(&pin.data_type)
+                || crate::features::connections::compatibility::are_types_convertible(
+                    src_type, &pin.data_type,
+                );
+            if !can_connect {
                 continue;
             }
             let c = NodeGraphRenderer::pin_canvas_pos(node, true, i, &canvas.graph);
