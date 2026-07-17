@@ -98,6 +98,13 @@ impl NodeGraphRenderer {
         graph: &BlueprintGraph,
     ) -> Point<f32> {
         let zoom = graph.zoom_level;
+        if node.node_type == NodeType::Reroute {
+            let cx = Self::graph_to_screen_pos(node.position, graph).x
+                + node.size.width * 0.5 * zoom;
+            let cy = Self::graph_to_screen_pos(node.position, graph).y
+                + node.size.height * 0.5 * zoom;
+            return Point::new(cx, cy);
+        }
         let scr = Self::graph_to_screen_pos(node.position, graph);
         let py = scr.y + (HEADER_H + SEP_H + BODY_PAD + pin_row_center_offset(node, row)) * zoom;
         let px_ = if is_input {
@@ -236,7 +243,9 @@ fn wire_phase(conn: &Connection) -> f32 {
 /// No pan or zoom applied — the GPU shader handles the transform.
 fn pin_gpos_row(node: &BlueprintNode, is_input: bool, row: usize) -> (f32, f32) {
     if node.node_type == NodeType::Reroute {
-        return (node.position.x, node.position.y);
+        let cx = node.position.x + node.size.width * 0.5;
+        let cy = node.position.y + node.size.height * 0.5;
+        return (cx, cy);
     }
     let py = node.position.y + HEADER_H + SEP_H + BODY_PAD + pin_row_center_offset(node, row);
     let px = if is_input {

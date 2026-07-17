@@ -50,10 +50,15 @@ fn hit_node<'a>(gp: Point<f32>, canvas: &'a GraphCanvasPanel) -> Option<&'a str>
 }
 
 fn hit_output_pin(cp: Point<f32>, canvas: &GraphCanvasPanel) -> Option<(String, String)> {
-    let r = (PIN_SIZE * canvas.graph.zoom_level * 0.9).max(6.0);
     for node in &canvas.graph.nodes {
         for (i, pin) in node.outputs.iter().enumerate() {
             let c = NodeGraphRenderer::pin_canvas_pos(node, false, i, &canvas.graph);
+            // Reroute nodes use a larger hit area matching the full circle body.
+            let r = if node.node_type == NodeType::Reroute {
+                (node.size.width.max(node.size.height) * 0.5 * canvas.graph.zoom_level).max(12.0)
+            } else {
+                (PIN_SIZE * canvas.graph.zoom_level * 0.9).max(6.0)
+            };
             let d = ((cp.x - c.x).powi(2) + (cp.y - c.y).powi(2)).sqrt();
             if d <= r {
                 return Some((node.id.clone(), pin.id.clone()));
@@ -69,7 +74,6 @@ fn hit_input_pin(
     skip_node: &str,
     src_type: &DataType,
 ) -> Option<(String, String)> {
-    let r = (PIN_SIZE * canvas.graph.zoom_level * 1.3).max(8.0);
     for node in &canvas.graph.nodes {
         if node.id == skip_node {
             continue;
@@ -82,6 +86,12 @@ fn hit_input_pin(
             if !can_connect {
                 continue;
             }
+            // Reroute nodes get a larger hit area matching the full circle body.
+            let r = if node.node_type == NodeType::Reroute {
+                (node.size.width.max(node.size.height) * 0.5 * canvas.graph.zoom_level).max(12.0)
+            } else {
+                (PIN_SIZE * canvas.graph.zoom_level * 1.3).max(8.0)
+            };
             let c = NodeGraphRenderer::pin_canvas_pos(node, true, i, &canvas.graph);
             let d = ((cp.x - c.x).powi(2) + (cp.y - c.y).powi(2)).sqrt();
             if d <= r {
