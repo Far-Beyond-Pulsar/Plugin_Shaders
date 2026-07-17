@@ -122,7 +122,9 @@ impl NodeGraphRenderer {
         graph: &BlueprintGraph,
     ) -> Option<Point<f32>> {
         if node.node_type == NodeType::Reroute {
-            return Some(Self::graph_to_screen_pos(node.position, graph));
+            let cx = node.position.x + node.size.width * 0.5;
+            let cy = node.position.y + node.size.height * 0.5;
+            return Some(Self::graph_to_screen_pos(Point::new(cx, cy), graph));
         }
         let row = if is_input {
             node.inputs.iter().position(|p| p.id == pin_id)?
@@ -138,6 +140,11 @@ impl NodeGraphRenderer {
         row: usize,
         _graph: &BlueprintGraph,
     ) -> Point<f32> {
+        if node.node_type == NodeType::Reroute {
+            let cx = node.position.x + node.size.width * 0.5;
+            let cy = node.position.y + node.size.height * 0.5;
+            return Point::new(cx, cy);
+        }
         let py = node.position.y + HEADER_H + SEP_H + BODY_PAD + pin_row_center_offset(node, row);
         let px_ = if is_input {
             node.position.x + BODY_PAD
@@ -259,7 +266,9 @@ fn pin_gpos_row(node: &BlueprintNode, is_input: bool, row: usize) -> (f32, f32) 
 /// Graph-space pin centre addressed by pin ID.
 fn pin_gpos_id(node: &BlueprintNode, pin_id: &str, is_input: bool) -> Option<(f32, f32)> {
     if node.node_type == NodeType::Reroute {
-        return Some((node.position.x, node.position.y));
+        let cx = node.position.x + node.size.width * 0.5;
+        let cy = node.position.y + node.size.height * 0.5;
+        return Some((cx, cy));
     }
     let row = if is_input {
         node.inputs.iter().position(|p| p.id == pin_id)?
