@@ -23,8 +23,8 @@ ui_common          = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native
 pulsar_reflection  = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "f91bbba2b90ebad0afa6b9940ecd52da0430e326" }
 
 # Shader compiler stack
-psgc   = { git = "https://github.com/Far-Beyond-Pulsar/PSGC", rev = "c2650ed0aba111eb7e0c781c73d5933f1290e410" }
-wgsl_std = { git = "https://github.com/Far-Beyond-Pulsar/PSGC", rev = "c2650ed0aba111eb7e0c781c73d5933f1290e410" }
+psgc   = { git = "https://github.com/Far-Beyond-Pulsar/PSGC", rev = "85c4bb048cd945f7acdca074159fb7230935b636" }
+wgsl_std = { git = "https://github.com/Far-Beyond-Pulsar/PSGC", rev = "85c4bb048cd945f7acdca074159fb7230935b636" }
 graphy = { git = "https://github.com/Far-Beyond-Pulsar/Graphy.git", rev = "f8e8cae8daf47803a84ca9031f95eace4812e553" }
 # Utilities
 uuid = { version = "1.0", features = ["v4"] }
