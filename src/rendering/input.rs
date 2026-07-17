@@ -429,7 +429,12 @@ pub fn on_mouse_down_left(
                 return;
             }
 
-            // Empty space — start selection drag
+            // Empty space — double-click on a connection line creates a reroute
+            if canvas.handle_empty_space_click(gp, cx) {
+                update_graph_cursor(window, canvas, cp, gp);
+                return;
+            }
+            // Single click — start selection drag
             if !event.modifiers.control {
                 canvas.graph.selected_nodes.clear();
                 canvas.graph.selected_comments.clear();

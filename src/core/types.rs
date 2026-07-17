@@ -395,7 +395,7 @@ impl BlueprintNode {
             icon: "•".to_string(),
             node_type: NodeType::Reroute,
             position,
-            size: Size::new(16.0, 16.0), // Small size for reroute nodes
+            size: Size::new(28.0, 28.0), // Custom-sized for reroute nodes
             inputs: vec![Pin {
                 id: "input".to_string(),
                 name: "".to_string(),
