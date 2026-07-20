@@ -1,9 +1,5 @@
 //! Type compatibility and inference for connections
 
-use std::sync::OnceLock;
-use graphy::type_checker::ConversionResolver;
-use graphy::core::NodeMetadataProvider;
-
 use crate::core::graph::BlueprintGraph;
 use crate::core::types::{Connection, NodeType};
 use crate::core::types::PinDataType as GraphDataType;
@@ -16,14 +12,12 @@ pub fn are_types_compatible(from_type: &GraphDataType, to_type: &GraphDataType) 
 /// Check if two types can be connected via an auto-inserted conversion path.
 pub fn are_types_convertible(from_type: &GraphDataType, to_type: &GraphDataType) -> bool {
     if are_types_compatible(from_type, to_type) {
-        return false; // already compatible, no conversion needed
+        return false;
     }
     if from_type.is_execution() || to_type.is_execution() {
         return false;
     }
-    conversion_resolver()
-        .registry()
-        .can_convert(&from_type.type_name, &to_type.type_name)
+    false
 }
 
 /// Return the conversion node chain from `from_type` to `to_type`.
@@ -33,43 +27,7 @@ pub fn get_conversion_path(
     from_type: &GraphDataType,
     to_type: &GraphDataType,
 ) -> Option<Vec<(String, String, String)>> {
-    if from_type.is_execution() || to_type.is_execution() {
-        return None;
-    }
-    conversion_resolver()
-        .registry()
-        .find_path(&from_type.type_name, &to_type.type_name)
-        .map(|path| {
-            path.into_iter()
-                .map(|(node, f, t)| (node.to_string(), f.to_string(), t.to_string()))
-                .collect()
-        })
-}
-
-// ── Cached ConversionResolver ───────────────────────────────────────────────
-
-fn conversion_resolver() -> &'static ConversionResolver {
-    static RESOLVER: OnceLock<ConversionResolver> = OnceLock::new();
-    RESOLVER.get_or_init(|| {
-        let nodes = psgc::metadata::get_shader_nodes();
-        let map: std::collections::HashMap<_, _> =
-            nodes.into_iter().map(|n| (n.name.clone(), n)).collect();
-        ConversionResolver::from_provider(&MetadataAdapter(map))
-    })
-}
-
-struct MetadataAdapter(std::collections::HashMap<String, graphy::NodeMetadata>);
-
-impl NodeMetadataProvider for MetadataAdapter {
-    fn get_node_metadata(&self, node_type: &str) -> Option<&graphy::NodeMetadata> {
-        self.0.get(node_type)
-    }
-    fn get_all_nodes(&self) -> Vec<&graphy::NodeMetadata> {
-        self.0.values().collect()
-    }
-    fn get_nodes_by_category(&self, category: &str) -> Vec<&graphy::NodeMetadata> {
-        self.0.values().filter(|m| m.category == category).collect()
-    }
+    None
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

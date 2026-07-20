@@ -121,19 +121,19 @@ impl NodeDefinitions {
                 });
             }
 
-            // Add output pins from multi-output params (Break / Make).
-            for out in &node_meta.output_params {
+            // Add output pins from multi-output exec names (Break / Make).
+            for out_name in &node_meta.exec_outputs {
                 outputs.push(PinDefinition {
-                    id: out.name.clone(),
-                    name: out.name.clone(),
-                    data_type: PinDataType::from_type_str(&out.param_type),
+                    id: out_name.clone(),
+                    name: out_name.clone(),
+                    data_type: PinDataType::from_type_str("exec"),
                     pin_type: PinType::Output,
                 });
             }
 
-            // If no output_params were declared, fall back to a single
+            // If no exec_outputs were declared, fall back to a single
             // "result" pin from return_type (the legacy single-output case).
-            if node_meta.output_params.is_empty() {
+            if node_meta.exec_outputs.is_empty() {
                 if let Some(return_type) = &node_meta.return_type {
                     outputs.push(PinDefinition {
                         id: "result".to_string(),
