@@ -543,7 +543,7 @@ impl PropertiesRenderer {
             div()
                 .text_xs()
                 .font_bold()
-                .text_color(cx.theme().accent)
+                .text_color(cx.theme().foreground)
                 .child(title.to_uppercase()),
         )
     }
