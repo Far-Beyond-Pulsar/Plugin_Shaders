@@ -634,7 +634,6 @@ impl PropertiesRenderer {
         };
 
         let state_key = format!("{}#{}", node.id, pin.id);
-        let widgets = canvas.pin_property_state.widget_map_for(&state_key, &pin.id);
         let current_json = Self::read_pin_property_value(node, &pin.id);
         let current_any: Box<dyn Any> = if current_json.is_null() {
             Box::new(())
@@ -658,14 +657,15 @@ impl PropertiesRenderer {
         );
 
         let editor = ui_common::render_property_row_runtime(
+            &mut canvas.pin_property_state,
             "node-input",
             &state_key,
             &Self::format_property_name(&pin.name),
             &pin.id,
             type_info,
             current_any.as_ref(),
-            widgets,
             write_back,
+            window,
             cx,
         );
 
