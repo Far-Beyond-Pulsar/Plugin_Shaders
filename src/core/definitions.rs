@@ -80,21 +80,58 @@ impl NodeDefinitions {
         let mut categories_map: HashMap<String, Vec<NodeDefinition>> = HashMap::new();
 
         // Add reroute node to Utility category
-        categories_map
-            .entry("Utility".to_string())
-            .or_insert_with(Vec::new)
-            .push(NodeDefinition {
-                id: "reroute".to_string(),
-                name: "Reroute".to_string(),
-                icon: "•".to_string(),
-                description: "Organize connections with a pass-through node (typeless until connected)".to_string(),
-                documentation: "Organize connections with a pass-through node (typeless until connected)".to_string(),
-                inputs: vec![],
-                outputs: vec![],
-                properties: HashMap::new(),
-                color: None,
-                is_event: false,
-            });
+            categories_map
+                .entry("Utility".to_string())
+                .or_insert_with(Vec::new)
+                .push(NodeDefinition {
+                    id: "reroute".to_string(),
+                    name: "Reroute".to_string(),
+                    icon: "•".to_string(),
+                    description: "Organize connections with a pass-through node (typeless until connected)".to_string(),
+                    documentation: "Organize connections with a pass-through node (typeless until connected)".to_string(),
+                    inputs: vec![],
+                    outputs: vec![],
+                    properties: HashMap::new(),
+                    color: None,
+                    is_event: false,
+                });
+
+        // Constant input nodes — editable values inline in the Properties panel
+        let constants: Vec<(&str, &str, &str, &str)> = vec![
+            ("float_constant", "Float", "∑", "f32"),
+            ("int_constant", "Integer", "∑", "int"),
+            ("uint_constant", "Unsigned Integer", "∑", "uint"),
+            ("bool_constant", "Boolean", "∑", "bool"),
+            ("vec2_constant", "Vector 2", "↗", "vec2<f32>"),
+            ("vec3_constant", "Vector 3", "↗", "vec3<f32>"),
+            ("vec4_constant", "Vector 4", "↗", "vec4<f32>"),
+            ("mat4_constant", "Matrix 4x4", "↗", "mat4x4<f32>"),
+        ];
+        let mut const_props = HashMap::new();
+        const_props.insert("value".to_string(), "0".to_string());
+        for (id, name, icon, type_str) in &constants {
+            let out_pin = PinDefinition {
+                id: "result".to_string(),
+                name: "".to_string(),
+                data_type: PinDataType::from_type_str(*type_str),
+                pin_type: PinType::Output,
+            };
+            categories_map
+                .entry("Input".to_string())
+                .or_insert_with(Vec::new)
+                .push(NodeDefinition {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    icon: icon.to_string(),
+                    description: format!("Constant {} value — edit in the Properties panel", name),
+                    documentation: format!("Constant {} value — edit in the Properties panel", name),
+                    inputs: vec![],
+                    outputs: vec![out_pin],
+                    properties: const_props.clone(),
+                    color: None,
+                    is_event: false,
+                });
+        }
 
         // Group shader nodes by category
         for node_meta in metadata {

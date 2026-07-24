@@ -91,7 +91,7 @@ fn hit_input_pin(
             let r = if node.node_type == NodeType::Reroute {
                 (node.size.width.max(node.size.height) * 0.5 * canvas.graph.zoom_level) * 0.4
             } else {
-                (PIN_SIZE * canvas.graph.zoom_level * 1.3).max(8.0)
+                (PIN_SIZE * canvas.graph.zoom_level * 3.0).max(20.0)
             };
             let c = NodeGraphRenderer::pin_canvas_pos(node, true, i, &canvas.graph);
             let d = ((cp.x - c.x).powi(2) + (cp.y - c.y).powi(2)).sqrt();
@@ -104,7 +104,7 @@ fn hit_input_pin(
 }
 
 fn hit_any_pin(cp: Point<f32>, canvas: &GraphCanvasPanel) -> Option<(String, String)> {
-    let r = (PIN_SIZE * canvas.graph.zoom_level * 1.2).max(8.0);
+    let r = (PIN_SIZE * canvas.graph.zoom_level * 3.0).max(20.0);
     for node in &canvas.graph.nodes {
         for (is_input, pins) in [(true, &node.inputs), (false, &node.outputs)] {
             for (i, pin) in pins.iter().enumerate() {
@@ -497,6 +497,16 @@ pub fn on_mouse_move(
                 canvas.update_drag(gp, cx);
             } else if canvas.dragging_connection.is_some() {
                 canvas.update_connection_drag(mp, cx);
+
+                if let Some(ref drag) = canvas.dragging_connection.clone() {
+                    if let Some((nid, pid)) =
+                        hit_input_pin(mp, canvas, &drag.source_node, &drag.source_pin_type)
+                    {
+                        canvas.set_connection_target(Some(nid), Some(pid), cx);
+                    } else {
+                        canvas.set_connection_target(None, None, cx);
+                    }
+                }
             } else if canvas.is_selecting() {
                 canvas.update_selection_drag(gp, cx);
             } else if canvas.is_panning() {

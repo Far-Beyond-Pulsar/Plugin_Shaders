@@ -9,6 +9,7 @@ use gpui::*;
 use ui::{
     button::ButtonVariants as _, h_flex, v_flex, ActiveTheme as _, Colorize, IconName, StyledExt,
 };
+use ui::input::{InputState, TextInput};
 
 use crate::core::types::{BlueprintComment, BlueprintNode, NodeType, Pin};
 use crate::editor::panel::ShaderEditorPanel;
@@ -630,7 +631,55 @@ impl PropertiesRenderer {
         }
 
         let Some(type_info) = pin.data_type.runtime_type() else {
-            return row.into_any_element();
+            let type_name = pin.data_type.type_name.as_str();
+            if !matches!(
+                type_name,
+                "f32"
+                    | "vec2<f32>"
+                    | "vec3<f32>"
+                    | "vec4<f32>"
+                    | "int"
+                    | "uint"
+                    | "bool"
+                    | "mat4x4<f32>"
+            ) {
+                return row.into_any_element();
+            }
+
+            let key = format!("{}#{}", node.id, pin.id);
+            let is_new = !canvas.pin_fallback_input_states.contains_key(&key);
+            let (input_state, _sub) = canvas
+                .pin_fallback_input_states
+                .entry(key)
+                .or_insert_with(|| {
+                    let state =
+                        cx.new(|cx| InputState::new(window, cx).placeholder("value"));
+                    let node_id_c = node.id.clone();
+                    let pin_id_c = pin.id.clone();
+                    let sub = cx.observe(&state, move |this, emitter, cx| {
+                        let text = emitter.read(cx).text().to_string();
+                        if let Some(n) =
+                            this.graph.nodes.iter_mut().find(|n| n.id == node_id_c)
+                        {
+                            n.properties.insert(pin_id_c.clone(), text);
+                            this.is_dirty = true;
+                        }
+                    });
+                    (state, sub)
+                });
+
+            if is_new {
+                let stored = node.properties.get(&pin.id).cloned().unwrap_or_default();
+                input_state.update(cx, |s, cx| {
+                    s.set_value(stored, window, cx);
+                });
+            }
+
+            return h_flex()
+                .gap_1()
+                .child(row)
+                .child(TextInput::new(input_state))
+                .into_any_element();
         };
 
         let state_key = format!("{}#{}", node.id, pin.id);
