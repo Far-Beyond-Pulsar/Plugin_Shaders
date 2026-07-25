@@ -86,14 +86,13 @@ impl ShaderEditorPanel {
                 });
             }
 
-            // Convert properties
+            // Convert properties. Empty input editors mean "use the shader
+            // type's default"; serializing them as JSON strings would make
+            // Graphy emit `""` as WGSL and crash preview pipeline creation.
             for (key, value) in &bp_node.properties {
-                let prop_value: serde_json::Value = if let Ok(n) = value.parse::<f64>() {
-                    serde_json::json!(n)
-                } else if let Ok(b) = value.parse::<bool>() {
-                    serde_json::json!(b)
-                } else {
-                    serde_json::json!(value)
+                let is_input_property = bp_node.inputs.iter().any(|pin| pin.id == *key);
+                let Some(prop_value) = property_to_psgc_value(value, is_input_property) else {
+                    continue;
                 };
                 node_instance.set_property(key, prop_value);
             }
@@ -461,6 +460,55 @@ impl ShaderEditorPanel {
         }
 
         Ok(wgsl)
+    }
+}
+
+fn property_to_psgc_value(
+    value: &str,
+    is_input_property: bool,
+) -> Option<serde_json::Value> {
+    let value = value.trim();
+    if is_input_property && value.is_empty() {
+        return None;
+    }
+
+    Some(if let Ok(number) = value.parse::<f64>() {
+        serde_json::json!(number)
+    } else if let Ok(boolean) = value.parse::<bool>() {
+        serde_json::json!(boolean)
+    } else {
+        serde_json::json!(value)
+    })
+}
+
+#[cfg(test)]
+mod property_conversion_tests {
+    use super::property_to_psgc_value;
+
+    #[test]
+    fn blank_input_property_uses_shader_default() {
+        assert_eq!(property_to_psgc_value("", true), None);
+        assert_eq!(property_to_psgc_value("   ", true), None);
+    }
+
+    #[test]
+    fn blank_non_input_property_is_preserved() {
+        assert_eq!(
+            property_to_psgc_value("", false),
+            Some(serde_json::Value::String(String::new()))
+        );
+    }
+
+    #[test]
+    fn scalar_input_properties_keep_their_types() {
+        assert_eq!(
+            property_to_psgc_value("0.5", true),
+            Some(serde_json::json!(0.5))
+        );
+        assert_eq!(
+            property_to_psgc_value("true", true),
+            Some(serde_json::json!(true))
+        );
     }
 }
 

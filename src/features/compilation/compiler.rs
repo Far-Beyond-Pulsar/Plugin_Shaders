@@ -44,8 +44,10 @@ impl ShaderEditorPanel {
     /// Compile to WGSL via PSGC
     pub fn compile_to_wgsl(&self) -> Result<String, String> {
         let graph = self.convert_graph_to_psgc()?;
-        psgc::compile_shader(&graph)
-            .map_err(|e| format!("WGSL compilation failed: {}", e))
+        let wgsl = psgc::compile_shader(&graph)
+            .map_err(|e| format!("WGSL compilation failed: {}", e))?;
+        validate_wgsl(&wgsl)?;
+        Ok(wgsl)
     }
 
     /// Dump shader debug info
@@ -186,5 +188,55 @@ impl ShaderEditorPanel {
                 cx.notify();
             }
         });
+    }
+}
+
+fn validate_wgsl(source: &str) -> Result<(), String> {
+    let module = naga::front::wgsl::parse_str(source)
+        .map_err(|error| format!("WGSL validation failed: {}", error.emit_to_string(source)))?;
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .map_err(|error| format!("WGSL validation failed: {error}"))?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod wgsl_validation_tests {
+    use super::validate_wgsl;
+
+    #[test]
+    fn rejects_string_literals_before_wgpu_pipeline_creation() {
+        let invalid = r#"
+struct FragmentOutput {
+    @location(0) color: vec4<f32>,
+}
+
+@fragment
+fn fragment_main() -> FragmentOutput {
+    return FragmentOutput("");
+}
+"#;
+
+        let error = validate_wgsl(invalid).expect_err("WGSL string literal must be rejected");
+        assert!(error.contains("WGSL validation failed"));
+    }
+
+    #[test]
+    fn accepts_valid_fragment_output() {
+        let valid = r#"
+struct FragmentOutput {
+    @location(0) color: vec4<f32>,
+}
+
+@fragment
+fn fragment_main() -> FragmentOutput {
+    return FragmentOutput(vec4<f32>(0.0, 0.0, 0.0, 1.0));
+}
+"#;
+
+        validate_wgsl(valid).expect("valid WGSL");
     }
 }

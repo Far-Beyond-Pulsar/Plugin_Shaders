@@ -661,7 +661,11 @@ impl PropertiesRenderer {
                         if let Some(n) =
                             this.graph.nodes.iter_mut().find(|n| n.id == node_id_c)
                         {
-                            n.properties.insert(pin_id_c.clone(), text);
+                            if text.trim().is_empty() {
+                                n.properties.remove(&pin_id_c);
+                            } else {
+                                n.properties.insert(pin_id_c.clone(), text);
+                            }
                             this.is_dirty = true;
                         }
                     });
@@ -669,10 +673,16 @@ impl PropertiesRenderer {
                 });
 
             if is_new {
-                let stored = node.properties.get(&pin.id).cloned().unwrap_or_default();
-                input_state.update(cx, |s, cx| {
-                    s.set_value(stored, window, cx);
-                });
+                if let Some(stored) = node
+                    .properties
+                    .get(&pin.id)
+                    .filter(|value| !value.trim().is_empty())
+                    .cloned()
+                {
+                    input_state.update(cx, |s, cx| {
+                        s.set_value(stored, window, cx);
+                    });
+                }
             }
 
             return h_flex()
