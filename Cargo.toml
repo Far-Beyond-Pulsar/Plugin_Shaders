@@ -49,6 +49,7 @@ wgpu = { version = "30.0.0", default-features = false, features = [
     "vulkan",
     "wgsl",
 ] }
+naga = { version = "30.0.0", features = ["wgsl-in"] }
 parking_lot = "0.12"
 fontdue = "0.9"
 bytemuck = { version = "1", features = ["derive"] }
