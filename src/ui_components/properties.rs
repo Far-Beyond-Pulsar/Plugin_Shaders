@@ -718,6 +718,8 @@ impl PropertiesRenderer {
         let editor = ui_common::render_property_row_runtime(
             &mut canvas.pin_property_state,
             "node-input",
+            // Per-pin editor identity (already unique per node + input).
+            &state_key,
             &state_key,
             &Self::format_property_name(&pin.name),
             &pin.id,
