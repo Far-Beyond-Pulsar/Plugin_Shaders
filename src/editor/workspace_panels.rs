@@ -369,6 +369,7 @@ pub struct GraphCanvasPanel {
     pub comment_text_input: Entity<InputState>,
     pub comment_color_bindings_dirty: bool,
     pub pin_property_state: PropertyStateManager,
+    pub pin_fallback_input_states: HashMap<String, (Entity<InputState>, Subscription)>,
 
     pub subscriptions: Vec<Subscription>,
 }
@@ -481,6 +482,7 @@ impl GraphCanvasPanel {
             comment_text_input,
             comment_color_bindings_dirty: true,
             pin_property_state: PropertyStateManager::new(),
+            pin_fallback_input_states: HashMap::new(),
             subscriptions: Vec::new(),
         }
     }

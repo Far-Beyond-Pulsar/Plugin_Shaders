@@ -1,6 +1,6 @@
 //! Connection operations - dragging and managing connections between nodes
 
-use crate::core::types::{Connection, NodeType};
+use crate::core::types::{BlueprintNode, Connection, NodeType};
 use crate::editor::workspace_panels::GraphCanvasPanel;
 use gpui::*;
 use crate::core::types::PinDataType as GraphDataType;
@@ -88,11 +88,12 @@ impl GraphCanvasPanel {
                     let pin_data_type = pin.data_type.clone();
 
                     // Check compatibility and not same node
-                    if super::compatibility::are_types_compatible(
+                    if drag.source_node == node_id {
+                        tracing::info!("Cannot connect a node to itself");
+                    } else if super::compatibility::are_types_compatible(
                         &drag.source_pin_type,
                         &pin_data_type,
-                    ) && drag.source_node != node_id
-                    {
+                    ) {
                         // Check if source or target is a reroute node
                         let source_is_reroute =
                             self.graph.nodes.iter().any(|n| {
@@ -106,7 +107,6 @@ impl GraphCanvasPanel {
 
                         // Remove old connections based on pin types
                         if drag.source_pin_type == GraphDataType::execution() || source_is_reroute {
-                            // Execution pins and reroute outputs: single connection from source
                             tracing::info!(
                                 "Removing old connection from source {}:{}",
                                 drag.source_node,
@@ -122,7 +122,6 @@ impl GraphCanvasPanel {
                             || target_is_reroute
                             || pin_data_type != GraphDataType::execution()
                         {
-                            // Execution targets, reroute inputs, or data inputs: single connection to target
                             tracing::info!(
                                 "Removing old connection to target {}:{}",
                                 node_id,
@@ -133,19 +132,11 @@ impl GraphCanvasPanel {
                             });
                         }
 
-                        println!(
+                        tracing::info!(
                             "Creating connection from {}:{} to {}:{}",
                             drag.source_node, drag.source_pin, node_id, pin_id
                         );
-                        tracing::info!(
-                            "Creating connection from {}:{} to {}:{}",
-                            drag.source_node,
-                            drag.source_pin,
-                            node_id,
-                            pin_id
-                        );
 
-                        // Create new connection
                         let connection_type = if pin_data_type == GraphDataType::execution() {
                             ui::graph::ConnectionType::Execution
                         } else {
@@ -161,7 +152,6 @@ impl GraphCanvasPanel {
                             connection_type,
                         };
 
-                        // Create and execute undo command
                         let mut cmd =
                             crate::features::undo::AddConnectionCommand::new(connection.clone());
                         cmd.execute(self, cx);
@@ -180,6 +170,121 @@ impl GraphCanvasPanel {
                             );
                         }
 
+                        cx.notify();
+
+                    // ── Type-mismatch: try auto-conversion ─────────────────────
+                    } else if let Some(path) = super::compatibility::get_conversion_path(
+                        &drag.source_pin_type,
+                        &pin_data_type,
+                    ) {
+                        // Find positions of source and target nodes for layout
+                        let source_pos = self
+                            .graph
+                            .nodes
+                            .iter()
+                            .find(|n| n.id == drag.source_node)
+                            .map(|n| n.position)
+                            .unwrap_or(gpui::Point::new(0.0, 0.0));
+                        let target_pos = self
+                            .graph
+                            .nodes
+                            .iter()
+                            .find(|n| n.id == node_id)
+                            .map(|n| n.position)
+                            .unwrap_or(gpui::Point::new(0.0, 0.0));
+
+                        // Remove existing connections to the target pin (like any
+                        // real node-placement would do).
+                        self.graph.connections.retain(|conn| {
+                            !(conn.target_node == node_id && conn.target_pin == pin_id)
+                        });
+
+                        let mid_x = (source_pos.x + target_pos.x) / 2.0;
+                        let mid_y = (source_pos.y + target_pos.y) / 2.0;
+                        let step_offset = 60.0 * (path.len() as f32 + 1.0) / 2.0;
+
+                        let mut prev_node = drag.source_node.clone();
+                        let mut prev_pin = drag.source_pin.clone();
+
+                        for (step_idx, (conv_node_type, _from_ty, _to_ty)) in path.iter().enumerate() {
+                            let conv_id = format!(
+                                "__auto_conv_{}__{}__",
+                                conv_node_type,
+                                uuid::Uuid::new_v4()
+                            );
+
+                            // Build a proper node from its definition — this gives
+                            // correct sizing, pin layout, category colouring, and
+                            // avoids the reroute/pill rendering path entirely.
+                            let defs = crate::core::definitions::NodeDefinitions::load();
+                            let def = defs.get_node_definition(conv_node_type);
+                            let mut conv_node = match def {
+                                Some(d) => BlueprintNode::from_definition(
+                                    d,
+                                    gpui::Point::new(
+                                        mid_x,
+                                        mid_y - step_offset + 60.0 * step_idx as f32,
+                                    ),
+                                ),
+                                None => continue,
+                            };
+                            // Override the auto-generated ID so we can wire it up.
+                            conv_node.id = conv_id.clone();
+
+                            let input_pin_name = conv_node
+                                .inputs
+                                .first()
+                                .map(|p| p.id.clone())
+                                .unwrap_or_else(|| "input".to_string());
+
+                            let mut node_cmd = crate::features::undo::AddNodeCommand::new(conv_node);
+                            node_cmd.execute(self, cx);
+                            self.push_undo_command(
+                                crate::features::undo::Command::AddNode(node_cmd),
+                            );
+
+                            // Wire previous step → conversion input
+                            let conn = Connection {
+                                id: uuid::Uuid::new_v4().to_string(),
+                                source_node: prev_node,
+                                source_pin: prev_pin,
+                                target_node: conv_id.clone(),
+                                target_pin: input_pin_name,
+                                connection_type: ui::graph::ConnectionType::Data,
+                            };
+                            let mut conn_cmd =
+                                crate::features::undo::AddConnectionCommand::new(conn);
+                            conn_cmd.execute(self, cx);
+                            self.push_undo_command(
+                                crate::features::undo::Command::AddConnection(conn_cmd),
+                            );
+
+                            prev_node = conv_id;
+                            prev_pin = "result".to_string();
+                        }
+
+                        // Wire last conversion output → original target
+                        let final_conn = Connection {
+                            id: uuid::Uuid::new_v4().to_string(),
+                            source_node: prev_node,
+                            source_pin: prev_pin,
+                            target_node: node_id.clone(),
+                            target_pin: pin_id.clone(),
+                            connection_type: ui::graph::ConnectionType::Data,
+                        };
+                        let mut final_cmd =
+                            crate::features::undo::AddConnectionCommand::new(final_conn);
+                        final_cmd.execute(self, cx);
+                        self.push_undo_command(
+                            crate::features::undo::Command::AddConnection(final_cmd),
+                        );
+
+                        tracing::info!(
+                            "Auto-conversion inserted: {} → {} via {} steps",
+                            drag.source_pin_type.type_name,
+                            pin_data_type.type_name,
+                            path.len()
+                        );
                         cx.notify();
                     } else {
                         tracing::info!("Incompatible pin types or same node");

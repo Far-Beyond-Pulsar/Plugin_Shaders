@@ -9,6 +9,31 @@ pub fn are_types_compatible(from_type: &GraphDataType, to_type: &GraphDataType) 
     from_type.is_compatible_with(to_type)
 }
 
+/// Check if two types can be connected via an auto-inserted conversion path.
+pub fn are_types_convertible(from_type: &GraphDataType, to_type: &GraphDataType) -> bool {
+    if are_types_compatible(from_type, to_type) {
+        return false;
+    }
+    if from_type.is_execution() || to_type.is_execution() {
+        return false;
+    }
+    false
+}
+
+/// Return the conversion node chain from `from_type` to `to_type`.
+/// Each tuple is `(node_type_name, intermediate_from, intermediate_to)`.
+/// Returns `None` if no path exists.
+pub fn get_conversion_path(
+    from_type: &GraphDataType,
+    to_type: &GraphDataType,
+) -> Option<Vec<(String, String, String)>> {
+    None
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Below: unchanged existing code (reroute inference, validation, pin queries)
+// ═══════════════════════════════════════════════════════════════════════════════
+
 /// Infer the type of a reroute node based on its connections
 pub fn infer_reroute_type(node_id: &str, graph: &BlueprintGraph) -> Option<GraphDataType> {
     // Check if this is actually a reroute node

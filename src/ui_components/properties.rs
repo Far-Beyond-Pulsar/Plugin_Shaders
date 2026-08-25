@@ -9,12 +9,15 @@ use gpui::*;
 use ui::{
     button::ButtonVariants as _, h_flex, v_flex, ActiveTheme as _, Colorize, IconName, StyledExt,
 };
+use ui::input::{InputState, TextInput};
 
 use crate::core::types::{BlueprintComment, BlueprintNode, NodeType, Pin};
 use crate::editor::panel::ShaderEditorPanel;
 use crate::editor::workspace_panels::GraphCanvasPanel;
 use crate::features::connections::compatibility::is_pin_connected;
 use ui_common::reflected_properties_panel::rgba_to_hsla;
+use pulsar_reflection::RUNTIME_TYPE_REGISTRY;
+use std::any::Any;
 use std::sync::Arc;
 
 /// Renderer for the properties panel
@@ -543,7 +546,7 @@ impl PropertiesRenderer {
             div()
                 .text_xs()
                 .font_bold()
-                .text_color(cx.theme().accent)
+                .text_color(cx.theme().foreground)
                 .child(title.to_uppercase()),
         )
     }
@@ -628,49 +631,101 @@ impl PropertiesRenderer {
         }
 
         let Some(type_info) = pin.data_type.runtime_type() else {
-            return row.into_any_element();
+            let type_name = pin.data_type.type_name.as_str();
+            if !matches!(
+                type_name,
+                "f32"
+                    | "vec2<f32>"
+                    | "vec3<f32>"
+                    | "vec4<f32>"
+                    | "int"
+                    | "uint"
+                    | "bool"
+                    | "mat4x4<f32>"
+            ) {
+                return row.into_any_element();
+            }
+
+            let key = format!("{}#{}", node.id, pin.id);
+            let is_new = !canvas.pin_fallback_input_states.contains_key(&key);
+            let (input_state, _sub) = canvas
+                .pin_fallback_input_states
+                .entry(key)
+                .or_insert_with(|| {
+                    let state =
+                        cx.new(|cx| InputState::new(window, cx).placeholder("value"));
+                    let node_id_c = node.id.clone();
+                    let pin_id_c = pin.id.clone();
+                    let sub = cx.observe(&state, move |this, emitter, cx| {
+                        let text = emitter.read(cx).text().to_string();
+                        if let Some(n) =
+                            this.graph.nodes.iter_mut().find(|n| n.id == node_id_c)
+                        {
+                            if text.trim().is_empty() {
+                                n.properties.remove(&pin_id_c);
+                            } else {
+                                n.properties.insert(pin_id_c.clone(), text);
+                            }
+                            this.is_dirty = true;
+                        }
+                    });
+                    (state, sub)
+                });
+
+            if is_new {
+                if let Some(stored) = node
+                    .properties
+                    .get(&pin.id)
+                    .filter(|value| !value.trim().is_empty())
+                    .cloned()
+                {
+                    input_state.update(cx, |s, cx| {
+                        s.set_value(stored, window, cx);
+                    });
+                }
+            }
+
+            return h_flex()
+                .gap_1()
+                .child(row)
+                .child(TextInput::new(input_state))
+                .into_any_element();
         };
 
         let state_key = format!("{}#{}", node.id, pin.id);
-        let widgets = canvas.pin_property_state.widget_map_for(&state_key, &pin.id);
-        let current_value = Self::read_pin_property_value(node, &pin.id);
-        let node_id = node.id.clone();
-        let pin_id = pin.id.clone();
-        let canvas_for_bool = canvas_entity.clone();
-        let on_bool_toggle = Arc::new(
-            move |checked: bool, _window: &mut Window, cx: &mut App| {
-                canvas_for_bool.update(cx, |canvas, cx| {
-                    canvas.update_node_input_property(&node_id, &pin_id, serde_json::Value::Bool(checked), cx);
-                });
-            },
-        );
+        let current_json = Self::read_pin_property_value(node, &pin.id);
+        let current_any: Box<dyn Any> = if current_json.is_null() {
+            Box::new(())
+        } else {
+            RUNTIME_TYPE_REGISTRY
+                .deserialize_json_for_type(type_info, current_json.clone())
+                .unwrap_or_else(|_| Box::new(()))
+        };
 
-        let canvas_for_enum = canvas_entity.clone();
-        let node_id_for_enum = node.id.clone();
-        let pin_id_for_enum = pin.id.clone();
-        let on_enum_select = Arc::new(
-            move |ix: usize, _window: &mut Window, cx: &mut App| {
-                canvas_for_enum.update(cx, |canvas, cx| {
-                    canvas.update_node_input_property(
-                        &node_id_for_enum,
-                        &pin_id_for_enum,
-                        serde_json::Value::from(ix as u64),
-                        cx,
-                    );
-                });
+        let canvas_for_wb = canvas_entity.clone();
+        let node_id_for_wb = node.id.clone();
+        let pin_id_for_wb = pin.id.clone();
+        let write_back = Arc::new(
+            move |new_val: Box<dyn Any + Send>, _window: &mut Window, cx: &mut App| {
+                if let Ok(json) = RUNTIME_TYPE_REGISTRY.serialize_json_for_any(new_val.as_ref()) {
+                    canvas_for_wb.update(cx, |canvas, cx| {
+                        canvas.update_node_input_property(&node_id_for_wb, &pin_id_for_wb, json, cx);
+                    });
+                }
             },
         );
 
         let editor = ui_common::render_property_row_runtime(
+            &mut canvas.pin_property_state,
             "node-input",
             &state_key,
             &Self::format_property_name(&pin.name),
             &pin.id,
+            &pin.name,
             type_info,
-            &current_value,
-            widgets,
-            on_bool_toggle,
-            on_enum_select,
+            current_any.as_ref(),
+            write_back,
+            window,
             cx,
         );
 

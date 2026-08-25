@@ -50,10 +50,16 @@ fn hit_node<'a>(gp: Point<f32>, canvas: &'a GraphCanvasPanel) -> Option<&'a str>
 }
 
 fn hit_output_pin(cp: Point<f32>, canvas: &GraphCanvasPanel) -> Option<(String, String)> {
-    let r = (PIN_SIZE * canvas.graph.zoom_level * 0.9).max(6.0);
     for node in &canvas.graph.nodes {
         for (i, pin) in node.outputs.iter().enumerate() {
             let c = NodeGraphRenderer::pin_canvas_pos(node, false, i, &canvas.graph);
+            let r = if node.node_type == NodeType::Reroute {
+                // Inner 40 % of the reroute circle — small pin grab area.
+                // The outer ring is left for node-drag via hit_node.
+                (node.size.width.max(node.size.height) * 0.5 * canvas.graph.zoom_level) * 0.4
+            } else {
+                (PIN_SIZE * canvas.graph.zoom_level * 0.9).max(6.0)
+            };
             let d = ((cp.x - c.x).powi(2) + (cp.y - c.y).powi(2)).sqrt();
             if d <= r {
                 return Some((node.id.clone(), pin.id.clone()));
@@ -69,15 +75,24 @@ fn hit_input_pin(
     skip_node: &str,
     src_type: &DataType,
 ) -> Option<(String, String)> {
-    let r = (PIN_SIZE * canvas.graph.zoom_level * 1.3).max(8.0);
     for node in &canvas.graph.nodes {
         if node.id == skip_node {
             continue;
         }
         for (i, pin) in node.inputs.iter().enumerate() {
-            if !src_type.is_compatible_with(&pin.data_type) {
+            let can_connect = src_type.is_compatible_with(&pin.data_type)
+                || crate::features::connections::compatibility::are_types_convertible(
+                    src_type, &pin.data_type,
+                );
+            if !can_connect {
                 continue;
             }
+            // Reroute: inner 40 % for pin-grab; outer ring left for node-drag.
+            let r = if node.node_type == NodeType::Reroute {
+                (node.size.width.max(node.size.height) * 0.5 * canvas.graph.zoom_level) * 0.4
+            } else {
+                (PIN_SIZE * canvas.graph.zoom_level * 3.0).max(20.0)
+            };
             let c = NodeGraphRenderer::pin_canvas_pos(node, true, i, &canvas.graph);
             let d = ((cp.x - c.x).powi(2) + (cp.y - c.y).powi(2)).sqrt();
             if d <= r {
@@ -89,7 +104,7 @@ fn hit_input_pin(
 }
 
 fn hit_any_pin(cp: Point<f32>, canvas: &GraphCanvasPanel) -> Option<(String, String)> {
-    let r = (PIN_SIZE * canvas.graph.zoom_level * 1.2).max(8.0);
+    let r = (PIN_SIZE * canvas.graph.zoom_level * 3.0).max(20.0);
     for node in &canvas.graph.nodes {
         for (is_input, pins) in [(true, &node.inputs), (false, &node.outputs)] {
             for (i, pin) in pins.iter().enumerate() {
@@ -425,7 +440,12 @@ pub fn on_mouse_down_left(
                 return;
             }
 
-            // Empty space — start selection drag
+            // Empty space — double-click on a connection line creates a reroute
+            if canvas.handle_empty_space_click(gp, cx) {
+                update_graph_cursor(window, canvas, cp, gp);
+                return;
+            }
+            // Single click — start selection drag
             if !event.modifiers.control {
                 canvas.graph.selected_nodes.clear();
                 canvas.graph.selected_comments.clear();
@@ -477,6 +497,16 @@ pub fn on_mouse_move(
                 canvas.update_drag(gp, cx);
             } else if canvas.dragging_connection.is_some() {
                 canvas.update_connection_drag(mp, cx);
+
+                if let Some(ref drag) = canvas.dragging_connection.clone() {
+                    if let Some((nid, pid)) =
+                        hit_input_pin(mp, canvas, &drag.source_node, &drag.source_pin_type)
+                    {
+                        canvas.set_connection_target(Some(nid), Some(pid), cx);
+                    } else {
+                        canvas.set_connection_target(None, None, cx);
+                    }
+                }
             } else if canvas.is_selecting() {
                 canvas.update_selection_drag(gp, cx);
             } else if canvas.is_panning() {

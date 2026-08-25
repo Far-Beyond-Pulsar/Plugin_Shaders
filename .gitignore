@@ -21,3 +21,4 @@ target
 #.idea/
 .claude/.DS_Store
 .claude/worktrees/.DS_Store
+.DS_Store

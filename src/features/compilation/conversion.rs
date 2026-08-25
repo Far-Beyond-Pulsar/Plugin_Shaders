@@ -86,14 +86,13 @@ impl ShaderEditorPanel {
                 });
             }
 
-            // Convert properties
+            // Convert properties. Empty input editors mean "use the shader
+            // type's default"; serializing them as JSON strings would make
+            // Graphy emit `""` as WGSL and crash preview pipeline creation.
             for (key, value) in &bp_node.properties {
-                let prop_value: serde_json::Value = if let Ok(n) = value.parse::<f64>() {
-                    serde_json::json!(n)
-                } else if let Ok(b) = value.parse::<bool>() {
-                    serde_json::json!(b)
-                } else {
-                    serde_json::json!(value)
+                let is_input_property = bp_node.inputs.iter().any(|pin| pin.id == *key);
+                let Some(prop_value) = property_to_psgc_value(value, is_input_property) else {
+                    continue;
                 };
                 node_instance.set_property(key, prop_value);
             }
@@ -464,6 +463,55 @@ impl ShaderEditorPanel {
     }
 }
 
+fn property_to_psgc_value(
+    value: &str,
+    is_input_property: bool,
+) -> Option<serde_json::Value> {
+    let value = value.trim();
+    if is_input_property && value.is_empty() {
+        return None;
+    }
+
+    Some(if let Ok(number) = value.parse::<f64>() {
+        serde_json::json!(number)
+    } else if let Ok(boolean) = value.parse::<bool>() {
+        serde_json::json!(boolean)
+    } else {
+        serde_json::json!(value)
+    })
+}
+
+#[cfg(test)]
+mod property_conversion_tests {
+    use super::property_to_psgc_value;
+
+    #[test]
+    fn blank_input_property_uses_shader_default() {
+        assert_eq!(property_to_psgc_value("", true), None);
+        assert_eq!(property_to_psgc_value("   ", true), None);
+    }
+
+    #[test]
+    fn blank_non_input_property_is_preserved() {
+        assert_eq!(
+            property_to_psgc_value("", false),
+            Some(serde_json::Value::String(String::new()))
+        );
+    }
+
+    #[test]
+    fn scalar_input_properties_keep_their_types() {
+        assert_eq!(
+            property_to_psgc_value("0.5", true),
+            Some(serde_json::json!(0.5))
+        );
+        assert_eq!(
+            property_to_psgc_value("true", true),
+            Some(serde_json::json!(true))
+        );
+    }
+}
+
 fn preview_wgsl_requires_external_resources(wgsl: &str) -> bool {
     wgsl.contains("textureSample(")
         || wgsl.contains("textureSampleLevel(")
@@ -495,9 +543,30 @@ fn fragment_main(
 }
 
 fn wrap_vec3_preview_return(wgsl: &str) -> Result<String, String> {
+    // The codegen now emits `return FragmentOutput(base_color, metallic, …)`
+    // — wrap the first struct argument in `vec4<f32>(..., 1.0)` so a vec3
+    // node output works with the vec4 base_color field.
+    let output_struct = "FragmentOutput(";
+    if let Some(pos) = wgsl.rfind(output_struct) {
+        let before = &wgsl[..pos];
+        let after = &wgsl[pos + output_struct.len()..];
+        // Find the first comma-separated argument
+        if let Some(comma) = after.find(',') {
+            let first_arg = after[..comma].trim();
+            return Ok(format!(
+                "{}return vec4<f32>({}, 1.0){}",
+                before, first_arg, &after[comma..]
+            ));
+        }
+        // Single-value struct (shouldn't happen with current PBR output,
+        // but handle gracefully)
+        let trimmed = after.trim_end_matches(')').trim_end_matches(';').trim();
+        return Ok(format!("{}return vec4<f32>({}, 1.0);", before, trimmed));
+    }
+
+    // Fallback: try the old `return <expr>;` pattern
     let mut replaced = false;
     let mut lines = Vec::new();
-
     for line in wgsl.lines() {
         let trimmed = line.trim_start();
         if !replaced && trimmed.starts_with("return ") && trimmed.ends_with(';') {
@@ -507,11 +576,14 @@ fn wrap_vec3_preview_return(wgsl: &str) -> Result<String, String> {
                 .trim_start_matches("return ")
                 .trim_end_matches(';')
                 .trim();
-            lines.push(format!("{}return vec4<f32>({}, 1.0);", indent, expr));
-            replaced = true;
-        } else {
-            lines.push(line.to_string());
+            // Skip if expression is already vec4
+            if !expr.starts_with("vec4<f32>") {
+                lines.push(format!("{}return vec4<f32>({}, 1.0);", indent, expr));
+                replaced = true;
+                continue;
+            }
         }
+        lines.push(line.to_string());
     }
 
     if replaced {

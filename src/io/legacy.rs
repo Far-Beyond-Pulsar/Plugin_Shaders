@@ -106,6 +106,7 @@ impl From<LegacyGraphDescription> for GraphDescription {
             connections: legacy.connections.into_iter().map(|c| c.into()).collect(),
             metadata: legacy.metadata,
             comments: legacy.comments.into_iter().map(|c| c.into()).collect(),
+            custom_event_defs: std::collections::HashMap::new(),
         }
     }
 }
@@ -223,7 +224,11 @@ pub fn is_legacy_format(json: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{
+        hsl_to_rgb, LegacyBlueprintComment, LegacyColor, LegacyConnection, LegacyPosition,
+        LegacySize,
+    };
+    use ui::graph::{Connection, ConnectionType};
 
     #[test]
     fn test_hsl_to_rgb_grayscale() {

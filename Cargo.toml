@@ -18,14 +18,16 @@ gpui-ce = { git = "https://github.com/Far-Beyond-Pulsar/WGPUI", rev = "98e312efa
 ui      = { git = "https://github.com/Far-Beyond-Pulsar/WGPUI-Component", rev = "ccbab31e4e2364ef52efcb61c98c37a5d8cc79e1", features = ["tree-sitter-languages"] }
 
 # Pulsar plugin system & shared UI
-plugin_editor_api = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "f91bbba2b90ebad0afa6b9940ecd52da0430e326" }
-ui_common          = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "f91bbba2b90ebad0afa6b9940ecd52da0430e326" }
-pulsar_reflection  = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "f91bbba2b90ebad0afa6b9940ecd52da0430e326" }
+# All engine/UI types resolve through one current Pulsar revision so public GPUI
+# types keep a single Cargo package identity in standalone builds.
+plugin_editor_api = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "bbe5ecd3f10746c7ba580a113c06b8e4b6e5d0e2" }
+ui_common          = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "bbe5ecd3f10746c7ba580a113c06b8e4b6e5d0e2" }
+pulsar_reflection  = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Reflection", rev = "745ee787cc63288463c170aafb778672db8e85ac" }
 
-# Shader compiler stack
-psgc   = { git = "https://github.com/Far-Beyond-Pulsar/PSGC", rev = "85c4bb048cd945f7acdca074159fb7230935b636" }
-wgsl_std = { git = "https://github.com/Far-Beyond-Pulsar/PSGC", rev = "85c4bb048cd945f7acdca074159fb7230935b636" }
-graphy = { git = "https://github.com/Far-Beyond-Pulsar/Graphy.git", rev = "f8e8cae8daf47803a84ca9031f95eace4812e553" }
+# Shader compiler stack (local paths for development)
+psgc     = { path = "../../../crates/third-party/psgc/crates/psgc" }
+wgsl_std = { path = "../../../crates/third-party/psgc/crates/wgsl_std" }
+graphy   = { path = "../../../crates/third-party/graphy" }
 # Utilities
 uuid = { version = "1.0", features = ["v4"] }
 smol = "2.0"
@@ -49,6 +51,7 @@ wgpu = { version = "30.0.0", default-features = false, features = [
     "vulkan",
     "wgsl",
 ] }
+naga = { version = "30.0.0", features = ["wgsl-in"] }
 parking_lot = "0.12"
 fontdue = "0.9"
 bytemuck = { version = "1", features = ["derive"] }
@@ -59,3 +62,15 @@ tool_registry_macros = { git = "https://github.com/Far-Beyond-Pulsar/ToolbeltRS"
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62.2", features = ["Win32_Graphics_Direct3D12", "Win32_Graphics_Dxgi_Common"] }
 parking_lot = "0.12"
+
+[patch."https://github.com/Far-Beyond-Pulsar/WGPUI"]
+gpui-ce = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "bbe5ecd3f10746c7ba580a113c06b8e4b6e5d0e2" }
+
+[patch."https://github.com/Far-Beyond-Pulsar/WGPUI-Component"]
+ui = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "bbe5ecd3f10746c7ba580a113c06b8e4b6e5d0e2" }
+ui-macros = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "bbe5ecd3f10746c7ba580a113c06b8e4b6e5d0e2" }
+
+# Helio's internal SceneDB pin predates the World subscription rework; unify
+# on one copy so `World`/`ComponentId`/`Pod` types keep a single identity.
+[patch."https://github.com/Far-Beyond-Pulsar/SceneDB"]
+pulsar_scenedb = { git = "https://github.com/Far-Beyond-Pulsar//SceneDB", rev = "c761890789b3e3c16b362a91769570bd587e5ac6" }

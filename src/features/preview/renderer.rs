@@ -353,6 +353,10 @@ impl PreviewRenderer {
         // `@fragment fn fragment_main(...)` module — use it directly as the
         // fragment shader rather than wrapping it inside another function.
         if let Some(device) = &self.device {
+            // User-authored graphs must not route validation failures through
+            // WGPU's uncaptured-error handler, which panics the editor.
+            let error_scope = device.push_error_scope(ErrorFilter::Validation);
+
             let vs_module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some("preview vertex shader"),
                 source: ShaderSource::Wgsl(VERTEX_SHADER_SRC.into()),
@@ -425,7 +429,12 @@ impl PreviewRenderer {
                 multiview_mask: None,
                 cache: None,
             });
-            self.pipeline = Some(pipeline);
+
+            if let Some(error) = smol::block_on(error_scope.pop()) {
+                tracing::error!("Material preview pipeline rejected shader: {error}");
+            } else {
+                self.pipeline = Some(pipeline);
+            }
         }
         self.needs_recompile = false;
     }
