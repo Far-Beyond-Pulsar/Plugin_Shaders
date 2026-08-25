@@ -721,6 +721,7 @@ impl PropertiesRenderer {
             &state_key,
             &Self::format_property_name(&pin.name),
             &pin.id,
+            &pin.name,
             type_info,
             current_any.as_ref(),
             write_back,
