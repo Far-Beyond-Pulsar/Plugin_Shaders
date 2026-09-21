@@ -1,3 +1,4 @@
+pub mod delta;
 pub mod pin_preview;
 pub mod renderer;
 pub mod text;

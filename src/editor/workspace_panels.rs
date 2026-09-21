@@ -304,6 +304,8 @@ pub struct GraphCanvasPanel {
     pub canvas_origin: Rc<RefCell<Point<f32>>>,
     pub element_bounds: Option<Bounds<Pixels>>,
     pub graph_anim_start: std::time::Instant,
+    /// A throttled animation redraw is already scheduled.
+    pub anim_notify_pending: bool,
 
     pub running_nodes: HashSet<String>,
     pub show_minimap: bool,
@@ -438,6 +440,7 @@ impl GraphCanvasPanel {
             canvas_origin: Rc::new(RefCell::new(Point::new(0.0, 0.0))),
             element_bounds: None,
             graph_anim_start: std::time::Instant::now(),
+            anim_notify_pending: false,
             running_nodes: HashSet::new(),
             show_minimap: true,
             show_graph_controls: true,

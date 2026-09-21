@@ -27,7 +27,15 @@ pub struct MaterialPreviewPanel {
     orbiting: bool,
     last_drag_pos: Option<Point<Pixels>>,
     subscriptions: Vec<Subscription>,
+    /// When the last frame was rendered; paces the animation and derives `dt`.
+    last_frame: Option<std::time::Instant>,
+    /// A deferred next-frame notify is already scheduled.
+    frame_pending: bool,
 }
+
+/// The animated preview redraws at most this often. Every redraw re-lays-out the
+/// whole shader editor tree, so an uncapped loop cost several ms per display frame.
+const PREVIEW_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
 
 impl MaterialPreviewPanel {
     pub fn new(
@@ -48,6 +56,8 @@ impl MaterialPreviewPanel {
             orbiting: false,
             last_drag_pos: None,
             subscriptions: Vec::new(),
+            last_frame: None,
+            frame_pending: false,
         }
     }
 
@@ -210,6 +220,7 @@ impl MaterialPreviewPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        profiling::profile_scope!("shader preview: render");
         if self.needs_rebuild {
             self.rebuild_surface(window, cx);
         }
@@ -217,7 +228,10 @@ impl MaterialPreviewPanel {
         if self.auto_rotate && !self.orbiting {
             if let Some(editor) = self.editor.upgrade() {
                 let (yaw, pitch) = editor.read(cx).preview_rotation;
-                let new_yaw = yaw + self.auto_rotate_speed * 0.016;
+                let dt = self
+                    .last_frame
+                    .map_or(0.016, |t| t.elapsed().as_secs_f32().min(0.1));
+                let new_yaw = yaw + self.auto_rotate_speed * dt;
                 editor.update(cx, |panel, _cx| {
                     panel.preview_rotation = (new_yaw, pitch);
                 });
@@ -288,7 +302,19 @@ impl MaterialPreviewPanel {
 
         // Keep redrawing every frame for auto-rotate and the shifting
         // rainbow's `time` uniform.
-        cx.notify();
+        let now = std::time::Instant::now();
+        self.last_frame = Some(now);
+        if !self.frame_pending {
+            self.frame_pending = true;
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(PREVIEW_FRAME).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.frame_pending = false;
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
 
         div()
             .size_full()
