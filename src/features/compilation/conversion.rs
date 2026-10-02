@@ -335,8 +335,8 @@ impl ShaderEditorPanel {
                 target_node: connection.target_node.clone(),
                 target_pin: connection.target_pin.clone(),
                 connection_type: match connection.connection_type {
-                    PsgcConnectionType::Execution => ui::graph::ConnectionType::Execution,
-                    PsgcConnectionType::Data => ui::graph::ConnectionType::Data,
+                    PsgcConnectionType::Execution => blueprint_graph::ConnectionType::Execution,
+                    PsgcConnectionType::Data => blueprint_graph::ConnectionType::Data,
                 },
             };
             connections.push(bp_connection);

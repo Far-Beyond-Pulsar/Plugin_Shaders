@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use ui::graph::{Connection, ConnectionType, GraphDescription, NodeInstance};
+use blueprint_graph::{Connection, ConnectionType, GraphDescription, NodeInstance};
 
 // ============================================================================
 // Legacy Graph Format
@@ -22,7 +22,7 @@ pub struct LegacyGraphDescription {
     pub connections: Vec<LegacyConnection>,
 
     /// Graph metadata
-    pub metadata: ui::graph::GraphMetadata,
+    pub metadata: blueprint_graph::GraphMetadata,
 
     /// Blueprint comments (optional, added later)
     #[serde(default)]
@@ -111,12 +111,12 @@ impl From<LegacyGraphDescription> for GraphDescription {
     }
 }
 
-impl From<LegacyBlueprintComment> for ui::graph::BlueprintComment {
+impl From<LegacyBlueprintComment> for blueprint_graph::BlueprintComment {
     fn from(legacy: LegacyBlueprintComment) -> Self {
         // Convert HSL to RGB for the color array
         let (r, g, b) = hsl_to_rgb(legacy.color.h, legacy.color.s, legacy.color.l);
 
-        ui::graph::BlueprintComment {
+        blueprint_graph::BlueprintComment {
             id: legacy.id,
             text: legacy.text,
             position: (legacy.position.x, legacy.position.y),
@@ -228,7 +228,7 @@ mod tests {
         hsl_to_rgb, LegacyBlueprintComment, LegacyColor, LegacyConnection, LegacyPosition,
         LegacySize,
     };
-    use ui::graph::{Connection, ConnectionType};
+    use blueprint_graph::{Connection, ConnectionType};
 
     #[test]
     fn test_hsl_to_rgb_grayscale() {
@@ -281,7 +281,7 @@ mod tests {
             contained_node_ids: vec![],
         };
 
-        let comment: ui::graph::BlueprintComment = legacy_comment.into();
+        let comment: blueprint_graph::BlueprintComment = legacy_comment.into();
         assert_eq!(comment.id, "comment1");
         assert_eq!(comment.text, "Test");
         assert_eq!(comment.color[3], 0.3); // Alpha should be preserved

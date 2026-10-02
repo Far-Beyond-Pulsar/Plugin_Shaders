@@ -138,9 +138,9 @@ impl GraphCanvasPanel {
                         );
 
                         let connection_type = if pin_data_type == GraphDataType::execution() {
-                            ui::graph::ConnectionType::Execution
+                            blueprint_graph::ConnectionType::Execution
                         } else {
-                            ui::graph::ConnectionType::Data
+                            blueprint_graph::ConnectionType::Data
                         };
 
                         let connection = Connection {
@@ -250,7 +250,7 @@ impl GraphCanvasPanel {
                                 source_pin: prev_pin,
                                 target_node: conv_id.clone(),
                                 target_pin: input_pin_name,
-                                connection_type: ui::graph::ConnectionType::Data,
+                                connection_type: blueprint_graph::ConnectionType::Data,
                             };
                             let mut conn_cmd =
                                 crate::features::undo::AddConnectionCommand::new(conn);
@@ -270,7 +270,7 @@ impl GraphCanvasPanel {
                             source_pin: prev_pin,
                             target_node: node_id.clone(),
                             target_pin: pin_id.clone(),
-                            connection_type: ui::graph::ConnectionType::Data,
+                            connection_type: blueprint_graph::ConnectionType::Data,
                         };
                         let mut final_cmd =
                             crate::features::undo::AddConnectionCommand::new(final_conn);

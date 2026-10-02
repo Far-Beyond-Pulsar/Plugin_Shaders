@@ -13,6 +13,7 @@ path = "examples/standalone.rs"
 
 
 [dependencies]
+blueprint_graph = { path = "../blueprint_editor/graph" }
 profiling = { path = "../../../crates/profiling" }
 # UI dependencies (local paths so traits resolve to the same crate instance)
 gpui-ce = { git = "https://github.com/Far-Beyond-Pulsar/WGPUI", rev = "98e312efa8601b1244215c79aac88acb5e169e03" }

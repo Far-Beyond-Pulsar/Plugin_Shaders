@@ -234,7 +234,7 @@ impl ShaderEditorPanel {
             .map(|tab| {
                 (
                     tab.id.clone(),
-                    ui::graph::GraphViewState {
+                    blueprint_graph::GraphViewState {
                         pan_offset_x: tab.graph.pan_offset.x,
                         pan_offset_y: tab.graph.pan_offset.y,
                         zoom: tab.graph.zoom_level,

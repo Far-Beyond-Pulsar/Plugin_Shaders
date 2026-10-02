@@ -399,7 +399,7 @@ impl ShaderEditorPanel {
                     source_pin: source_pin.to_string(),
                     target_node: target_node.clone(),
                     target_pin: target_pin.to_string(),
-                    connection_type: ui::graph::ConnectionType::Data,
+                    connection_type: blueprint_graph::ConnectionType::Data,
                 });
             }
         };

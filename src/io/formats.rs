@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use ui::graph::{
+use blueprint_graph::{
     BlueprintMetadata, GraphViewState,
 };
 
