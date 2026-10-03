@@ -947,7 +947,7 @@ impl NodeGraphRenderer {
         // wgpu_surface() composites the GPU texture into the GPUI scene.
         // It must be present in the element tree for anything to appear.
         // On the first frame bp_surface is None so we show a dark placeholder;
-        // the canvas prepaint creates the surface and requests a re-render,
+        // the surface driver creates the surface and requests a re-render,
         // so frame 2 immediately shows the GPU output.
         let gpu_display: AnyElement = if let Some(ref s) = canvas.surface {
             wgpu_surface(s.clone())
@@ -975,86 +975,88 @@ impl NodeGraphRenderer {
             std::time::Duration::from_millis(33),
             move |canvas, geometry, window, cx| {
                 let bounds = geometry.bounds;
-                    // Capture element bounds for coordinate conversion
-                    let ox = bounds.origin.x.as_f32();
-                    let oy = bounds.origin.y.as_f32();
-                    let sw = bounds.size.width.as_f32() as u32;
-                    let sh = bounds.size.height.as_f32() as u32;
+                // Capture element bounds for coordinate conversion
+                let ox = bounds.origin.x.as_f32();
+                let oy = bounds.origin.y.as_f32();
+                let sw = bounds.size.width.as_f32() as u32;
+                let sh = bounds.size.height.as_f32() as u32;
 
+                *canvas.canvas_origin.borrow_mut() = Point::new(ox, oy);
+                let b = gpui::Bounds {
+                    origin: gpui::Point {
+                        x: px(ox),
+                        y: px(oy),
+                    },
+                    size: gpui::Size {
+                        width: px(sw as f32),
+                        height: px(sh as f32),
+                    },
+                };
+                canvas.element_bounds = Some(b);
 
-                        *canvas.canvas_origin.borrow_mut() = Point::new(ox, oy);
-                        let b = gpui::Bounds {
-                            origin: gpui::Point {
-                                x: px(ox),
-                                y: px(oy),
-                            },
-                            size: gpui::Size {
-                                width: px(sw as f32),
-                                height: px(sh as f32),
-                            },
-                        };
-                        canvas.element_bounds = Some(b);
+                // Create surface on first call — triggers re-render via notify
+                if canvas.surface.is_none() {
+                    if let Some(s) = window.create_wgpu_surface(
+                        sw.max(64),
+                        sh.max(64),
+                        wgpu::TextureFormat::Bgra8UnormSrgb,
+                    ) {
+                        canvas.surface = Some(s);
+                        cx.notify(); // re-render to pick up wgpu_surface() element
+                    }
+                }
 
-                        // Create surface on first call — triggers re-render via notify
-                        if canvas.surface.is_none() {
-                            if let Some(s) = window.create_wgpu_surface(
-                                sw.max(64),
-                                sh.max(64),
-                                wgpu::TextureFormat::Bgra8UnormSrgb,
-                            ) {
-                                canvas.surface = Some(s);
-                                cx.notify(); // re-render to pick up wgpu_surface() element
-                            }
-                        }
+                let Some(surface) = canvas.surface.clone() else {
+                    return false;
+                };
+                if surface.is_resize_pending() {
+                    return true;
+                }
+                let Some((view, (w, h))) = surface.back_view_with_size() else {
+                    return false;
+                };
 
+                let device = surface.device().clone();
+                let queue = surface.queue().clone();
+                let format = surface.format();
+                let mut uniforms = uniforms;
+                uniforms.time = canvas.graph_anim_start.elapsed().as_secs_f32();
+                uniforms.viewport = [bounds.size.width.as_f32(), bounds.size.height.as_f32()];
+                let texture_previews = canvas.build_texture_previews(
+                    &texture_preview_requests,
+                    &device,
+                    &queue,
+                    uniforms.time,
+                    cx,
+                );
+                canvas.renderer.render_frame(
+                    &device,
+                    &queue,
+                    &view,
+                    w,
+                    h,
+                    format,
+                    &uniforms,
+                    &comment_instances,
+                    &node_instances,
+                    &wire_instances, // one struct per bezier connection
+                    &line_verts,     // selection box straight lines only
+                    &pin_instances,
+                    &texture_previews,
+                    &text_calls,
+                );
+                drop(view);
+                surface.swap_buffers();
 
-                        let Some(surface) = canvas.surface.clone() else {
-                            return false;
-                        };
-                        if surface.is_resize_pending() {
-                            return false;
-                        }
-                        let Some((view, (w, h))) = surface.back_view_with_size() else {
-                            return false;
-                        };
-
-                        let device = surface.device().clone();
-                        let queue = surface.queue().clone();
-                        let format = surface.format();
-                        let mut uniforms = uniforms;
-                        uniforms.time = canvas.graph_anim_start.elapsed().as_secs_f32();
-                        let texture_previews = canvas.build_texture_previews(
-                            &texture_preview_requests,
-                            &device,
-                            &queue,
-                            uniforms.time,
-                            cx,
-                        );
-                        canvas.renderer.render_frame(
-                            &device,
-                            &queue,
-                            &view,
-                            w,
-                            h,
-                            format,
-                            &uniforms,
-                            &comment_instances,
-                            &node_instances,
-                            &wire_instances, // one struct per bezier connection
-                            &line_verts,     // selection box straight lines only
-                            &pin_instances,
-                            &texture_previews,
-                            &text_calls,
-                        );
-                        drop(view);
-                        surface.swap_buffers();
-
-                !canvas.running_nodes.is_empty() || (canvas.wire_active_test_mode && !canvas.graph.selected_nodes.is_empty()) || !texture_preview_requests.is_empty()
+                !canvas.running_nodes.is_empty()
+                    || (canvas.wire_active_test_mode && !canvas.graph.selected_nodes.is_empty())
+                    || !texture_preview_requests.is_empty()
             },
         )
         .absolute()
         .inset_0()
         .size_full();
+
         // Wrap the canvas in drop area for palette items
         div().size_full().child(
             div()
@@ -1064,7 +1066,7 @@ impl NodeGraphRenderer {
                 .track_focus(&focus_handle)
                 .key_context("BlueprintGraph")
                 .child(gpu_display) // wgpu_surface() or dark placeholder — MUST be first
-                .child(driver) // invisible canvas that drives GPU rendering
+                .child(driver) // retained driver for GPU rendering
                 // GPUI-only overlays (palette + context menus) sit on top
                 .child(Self::render_quick_palette_overlay_inner(
                     canvas.quick_palette_open,

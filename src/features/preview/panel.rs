@@ -33,7 +33,6 @@ pub struct MaterialPreviewPanel {
 }
 
 /// Pace GPU surface updates independently of the editor layout.
-/// whole shader editor tree, so an uncapped loop cost several ms per display frame.
 const PREVIEW_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
 
 impl MaterialPreviewPanel {
@@ -95,8 +94,7 @@ impl MaterialPreviewPanel {
                     editor.update(cx, |ed, _cx| {
                         let (yaw, pitch) = ed.preview_rotation;
                         let new_yaw = yaw + dx * ORBIT_SENSITIVITY;
-                        let new_pitch =
-                            (pitch + dy * ORBIT_SENSITIVITY).clamp(-1.5, 1.5);
+                        let new_pitch = (pitch + dy * ORBIT_SENSITIVITY).clamp(-1.5, 1.5);
                         ed.preview_rotation = (new_yaw, new_pitch);
                     });
                 }
@@ -105,9 +103,7 @@ impl MaterialPreviewPanel {
         }
     }
 
-    fn on_orbit_mouse_up(
-        cx: &mut Context<Self>,
-    ) -> impl Fn(&MouseUpEvent, &mut Window, &mut App) {
+    fn on_orbit_mouse_up(cx: &mut Context<Self>) -> impl Fn(&MouseUpEvent, &mut Window, &mut App) {
         let entity = cx.entity().clone();
         move |_event, _window, cx| {
             entity.update(cx, |panel, cx| {
@@ -142,11 +138,7 @@ impl MaterialPreviewPanel {
         }
     }
 
-    pub fn rebuild_surface(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn rebuild_surface(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.needs_rebuild {
             return;
         }
@@ -155,7 +147,9 @@ impl MaterialPreviewPanel {
         let width = (size.width.to_f64() as u32).max(1);
         let height = (size.height.to_f64() as u32).max(1);
 
-        let Some(surface) = window.create_wgpu_surface(width, height, wgpu::TextureFormat::Bgra8Unorm) else {
+        let Some(surface) =
+            window.create_wgpu_surface(width, height, wgpu::TextureFormat::Bgra8Unorm)
+        else {
             return;
         };
 
@@ -188,8 +182,11 @@ impl MaterialPreviewPanel {
         self.renderer
             .camera
             .frame_bounding_radius(mesh_data.bounding_radius());
-        self.renderer
-            .update_mesh(&mesh_data.vertices, &mesh_data.indices, mesh_data.index_count);
+        self.renderer.update_mesh(
+            &mesh_data.vertices,
+            &mesh_data.indices,
+            mesh_data.index_count,
+        );
 
         self.surface_handle = Some(surface);
         self.needs_rebuild = false;
@@ -201,8 +198,11 @@ impl MaterialPreviewPanel {
         self.renderer
             .camera
             .frame_bounding_radius(mesh_data.bounding_radius());
-        self.renderer
-            .update_mesh(&mesh_data.vertices, &mesh_data.indices, mesh_data.index_count);
+        self.renderer.update_mesh(
+            &mesh_data.vertices,
+            &mesh_data.indices,
+            mesh_data.index_count,
+        );
         self.needs_rebuild = true;
     }
 
@@ -235,7 +235,9 @@ impl MaterialPreviewPanel {
             self.renderer.camera.pitch = pitch;
         }
 
-        let wgsl_to_compile: Option<String> = self.editor.upgrade()
+        let wgsl_to_compile: Option<String> = self
+            .editor
+            .upgrade()
             .and_then(|editor| editor.read(cx).last_compiled_wgsl.clone());
 
         // Trigger an initial compile so the preview has a shader pipeline
@@ -270,14 +272,9 @@ impl MaterialPreviewPanel {
             }
         }
 
-
         self.last_frame = Some(std::time::Instant::now());
     }
-    fn render_preview(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         profiling::profile_scope!("shader preview: render");
         if self.needs_rebuild {
             self.rebuild_surface(window, cx);
@@ -298,10 +295,7 @@ impl MaterialPreviewPanel {
                 .size_full()
                 .into_any_element()
         } else {
-            div()
-                .size_full()
-                .bg(gpui::rgb(0x1a1a1a))
-                .into_any_element()
+            div().size_full().bg(gpui::rgb(0x1a1a1a)).into_any_element()
         };
 
         div()
