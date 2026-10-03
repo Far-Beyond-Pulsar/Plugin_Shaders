@@ -29,11 +29,10 @@ pub struct MaterialPreviewPanel {
     subscriptions: Vec<Subscription>,
     /// When the last frame was rendered; paces the animation and derives `dt`.
     last_frame: Option<std::time::Instant>,
-    /// A deferred next-frame notify is already scheduled.
-    frame_pending: bool,
+    surface_animation: plugin_editor_api::surface_animation::SurfaceAnimation,
 }
 
-/// The animated preview redraws at most this often. Every redraw re-lays-out the
+/// Pace GPU surface updates independently of the editor layout.
 /// whole shader editor tree, so an uncapped loop cost several ms per display frame.
 const PREVIEW_FRAME: std::time::Duration = std::time::Duration::from_millis(33);
 
@@ -57,7 +56,7 @@ impl MaterialPreviewPanel {
             last_drag_pos: None,
             subscriptions: Vec::new(),
             last_frame: None,
-            frame_pending: false,
+            surface_animation: Default::default(),
         }
     }
 
@@ -215,16 +214,8 @@ impl MaterialPreviewPanel {
         self.renderer.update_shader(wgsl_source);
     }
 
-    fn render_preview(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        profiling::profile_scope!("shader preview: render");
-        if self.needs_rebuild {
-            self.rebuild_surface(window, cx);
-        }
-
+    fn render_surface(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        profiling::profile_scope!("shader preview: surface frame");
         if self.auto_rotate && !self.orbiting {
             if let Some(editor) = self.editor.upgrade() {
                 let (yaw, pitch) = editor.read(cx).preview_rotation;
@@ -279,6 +270,19 @@ impl MaterialPreviewPanel {
             }
         }
 
+
+        self.last_frame = Some(std::time::Instant::now());
+    }
+    fn render_preview(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        profiling::profile_scope!("shader preview: render");
+        if self.needs_rebuild {
+            self.rebuild_surface(window, cx);
+        }
+
         // The rendered texture only appears once `wgpu_surface()` is present
         // in the element tree — the surface element handles resizing itself
         // to match its layout bounds, so the initial size doesn't matter.
@@ -300,22 +304,6 @@ impl MaterialPreviewPanel {
                 .into_any_element()
         };
 
-        // Keep redrawing every frame for auto-rotate and the shifting
-        // rainbow's `time` uniform.
-        let now = std::time::Instant::now();
-        self.last_frame = Some(now);
-        if !self.frame_pending {
-            self.frame_pending = true;
-            cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(PREVIEW_FRAME).await;
-                let _ = this.update(cx, |this, cx| {
-                    this.frame_pending = false;
-                    cx.notify();
-                });
-            })
-            .detach();
-        }
-
         div()
             .size_full()
             .min_h(px(200.))
@@ -327,7 +315,22 @@ impl MaterialPreviewPanel {
             .on_mouse_up(MouseButton::Right, Self::on_orbit_mouse_up(cx))
             .on_mouse_up_out(MouseButton::Right, Self::on_orbit_mouse_up(cx))
             .on_scroll_wheel(Self::on_orbit_scroll(cx))
+            .relative()
             .child(gpu_display)
+            .child(
+                plugin_editor_api::surface_animation::surface_animation(
+                    &cx.entity(),
+                    &mut self.surface_animation,
+                    PREVIEW_FRAME,
+                    |panel, _, window, cx| {
+                        panel.render_surface(window, cx);
+                        true // Material shaders and the sky can depend on time even without rotation.
+                    },
+                )
+                .absolute()
+                .inset_0()
+                .size_full(),
+            )
             .into_any_element()
     }
 }

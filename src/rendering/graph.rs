@@ -968,21 +968,20 @@ impl NodeGraphRenderer {
                 .into_any_element()
         };
 
-        // ── Canvas: creates surface in prepaint (has window), renders in paint ─
-        let driver = {
-            let pe_pre = canvas_entity.clone();
-            let pe_paint = canvas_entity.clone();
-            gpui::canvas(
-                // Prepaint: surface creation (first frame only).
-                // Called before paint — window is available here.
-                move |bounds, window, cx| {
+        // Retain GPU inputs between state changes; animation only publishes a surface.
+        let driver = plugin_editor_api::surface_animation::surface_animation(
+            &canvas_entity,
+            &mut canvas.surface_animation,
+            std::time::Duration::from_millis(33),
+            move |canvas, geometry, window, cx| {
+                let bounds = geometry.bounds;
                     // Capture element bounds for coordinate conversion
                     let ox = bounds.origin.x.as_f32();
                     let oy = bounds.origin.y.as_f32();
                     let sw = bounds.size.width.as_f32() as u32;
                     let sh = bounds.size.height.as_f32() as u32;
 
-                    pe_pre.update(cx, |canvas, cx| {
+
                         *canvas.canvas_origin.borrow_mut() = Point::new(ox, oy);
                         let b = gpui::Bounds {
                             origin: gpui::Point {
@@ -1007,29 +1006,28 @@ impl NodeGraphRenderer {
                                 cx.notify(); // re-render to pick up wgpu_surface() element
                             }
                         }
-                    });
-                },
-                // Paint: render GPU frame every frame.
-                move |_bounds, _pre, _window, cx| {
-                    pe_paint.update(cx, |canvas, cx| {
+
+
                         let Some(surface) = canvas.surface.clone() else {
-                            return;
+                            return false;
                         };
                         if surface.is_resize_pending() {
-                            return;
+                            return false;
                         }
                         let Some((view, (w, h))) = surface.back_view_with_size() else {
-                            return;
+                            return false;
                         };
 
                         let device = surface.device().clone();
                         let queue = surface.queue().clone();
                         let format = surface.format();
+                        let mut uniforms = uniforms;
+                        uniforms.time = canvas.graph_anim_start.elapsed().as_secs_f32();
                         let texture_previews = canvas.build_texture_previews(
                             &texture_preview_requests,
                             &device,
                             &queue,
-                            anim_time,
+                            uniforms.time,
                             cx,
                         );
                         canvas.renderer.render_frame(
@@ -1050,35 +1048,13 @@ impl NodeGraphRenderer {
                         );
                         drop(view);
                         surface.swap_buffers();
-                        if !canvas.running_nodes.is_empty()
-                            || (canvas.wire_active_test_mode
-                                && !canvas.graph.selected_nodes.is_empty())
-                            || !texture_preview_requests.is_empty()
-                        {
-                            // Live previews and running-node glow animate, but a
-                            // full redraw re-lays-out the editor tree: cap ~30 Hz.
-                            if !canvas.anim_notify_pending {
-                                canvas.anim_notify_pending = true;
-                                cx.spawn(async move |this, cx| {
-                                    cx.background_executor()
-                                        .timer(std::time::Duration::from_millis(33))
-                                        .await;
-                                    let _ = this.update(cx, |this, cx| {
-                                        this.anim_notify_pending = false;
-                                        cx.notify();
-                                    });
-                                })
-                                .detach();
-                            }
-                        }
-                    });
-                },
-            )
-            .absolute()
-            .inset_0()
-            .size_full()
-        };
 
+                !canvas.running_nodes.is_empty() || (canvas.wire_active_test_mode && !canvas.graph.selected_nodes.is_empty()) || !texture_preview_requests.is_empty()
+            },
+        )
+        .absolute()
+        .inset_0()
+        .size_full();
         // Wrap the canvas in drop area for palette items
         div().size_full().child(
             div()
