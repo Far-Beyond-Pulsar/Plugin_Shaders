@@ -362,7 +362,7 @@ impl PropertiesRenderer {
     fn render_comment_properties(
         panel: &ShaderEditorPanel,
         comment: &BlueprintComment,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<ShaderEditorPanel>,
     ) -> AnyElement {
         let active_canvas = panel.active_canvas().cloned();
@@ -376,6 +376,13 @@ impl PropertiesRenderer {
             if let Some(selected) = canvas_state.graph.comments.iter().find(|c| c.id == comment.id) {
                 comment_color = selected.color;
                 color_picker = selected.color_picker_state.clone();
+            }
+        }
+
+        // Keep the picker controls initialized from the selected comment.
+        if let Some(picker) = color_picker.as_ref() {
+            if picker.read(cx).value() != Some(comment_color) {
+                picker.update(cx, |picker, cx| picker.set_value(comment_color, window, cx));
             }
         }
 
@@ -472,7 +479,10 @@ impl PropertiesRenderer {
                                             .into_any_element(),
                                     )
                                     .child(color_picker.map(|picker| {
-                                        div().w_full().child(picker).into_any_element()
+                                        div()
+                                            .w_full()
+                                            .child(ui::color_picker::ColorPicker::new(&picker))
+                                            .into_any_element()
                                     }).unwrap_or_else(|| {
                                         div()
                                             .text_xs()

@@ -626,6 +626,13 @@ pub fn on_key_down(
     let entity = cx.entity().clone();
     move |event: &KeyDownEvent, window, cx| {
         entity.update(cx, |canvas, cx| {
+            // Key events bubble through the graph even when a text input in a
+            // sibling/overlay panel owns focus. Keep shortcuts scoped to the
+            // graph so typing "c" in an editor cannot add a comment.
+            if !canvas.focus_handle().is_focused(window) {
+                return;
+            }
+
             let key = event.keystroke.key.to_lowercase();
             let has_copy_paste_modifier =
                 event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
