@@ -592,12 +592,17 @@ mod property_conversion_tests {
 }
 
 fn preview_wgsl_requires_external_resources(wgsl: &str) -> bool {
-    let uses_external_resource = wgsl.contains("textureSample(")
+    // PinPreviewRenderer only installs the group-0 preview uniform layout.
+    // TextureSrc lowering adds real group-1 texture/sampler bindings, but
+    // their presence in the source does not mean those bindings are available
+    // to this renderer. Fall back before creating the pipeline rather than
+    // letting wgpu panic on a missing pipeline-layout group.
+    wgsl.contains("@group(1)")
+        || wgsl.contains("textureSample(")
         || wgsl.contains("textureSampleLevel(")
         || wgsl.contains("textureSampleGrad(")
         || wgsl.contains("texture_2d<")
-        || wgsl.contains(": sampler");
-    uses_external_resource && !wgsl.contains("// TextureSrc:")
+        || wgsl.contains(": sampler")
 }
 
 fn unsupported_resource_preview_wgsl() -> String {
