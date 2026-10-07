@@ -36,7 +36,7 @@ smol = "2.0"
 log = "0.4"
 tracing = "0.1.41"
 chrono = "0.4"
-image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "bmp", "tga", "gif", "webp"] }
+image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "bmp", "tga", "gif", "webp", "tiff"] }
 engine_state = { path = "../../../crates/core/engine_state" }
 
 # Serialization
