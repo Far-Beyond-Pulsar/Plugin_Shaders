@@ -51,6 +51,7 @@ fn compile_material_graph(mut graph: GraphDescription) -> Result<String, String>
                 .and_then(serde_json::Value::as_str)
                 .map(str::trim)
                 .filter(|path| !path.is_empty())
+                .map(str::to_owned)
                 .ok_or_else(|| format!("Texture input '{}' has no selected asset", input.id))?;
             let resource = format!("pulsar_texture_{}", declarations.len());
             node.properties.insert(
@@ -59,7 +60,7 @@ fn compile_material_graph(mut graph: GraphDescription) -> Result<String, String>
             );
             declarations.push(format!(
                 "// TextureSrc: {}\n@group(1) @binding({binding}) var {resource}: texture_2d<f32>;\n",
-                serde_json::to_string(path).unwrap_or_else(|_| "\"\"".into()),
+                serde_json::to_string(&path).unwrap_or_else(|_| "\"\"".into()),
             ));
             binding += 1;
         }
@@ -80,7 +81,7 @@ fn render_first_frame(wgsl: &str) -> Option<RgbaImage> {
 }
 
 async fn render_first_frame_async(wgsl: &str) -> Result<RgbaImage, String> {
-    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::new_without_display_handle());
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
@@ -180,7 +181,9 @@ async fn render_first_frame_async(wgsl: &str) -> Result<RgbaImage, String> {
         .map_err(|error| format!("Material thumbnail readback failed: {error}"))?
         .map_err(|error| format!("Could not map material thumbnail pixels: {error}"))?;
 
-    let mapped = slice.get_mapped_range();
+    let mapped = slice
+        .get_mapped_range()
+        .map_err(|error| format!("Could not read material thumbnail pixels: {error}"))?;
     let mut rgba = Vec::with_capacity((THUMBNAIL_SIZE * THUMBNAIL_SIZE * 4) as usize);
     for pixel in mapped.chunks_exact(4) {
         rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
