@@ -217,11 +217,16 @@ fn create_texture_bindings(
         };
         let decoded = image::open(&resolved_path).map(|image| image.to_rgba8());
         let (width, height, pixels) = match decoded {
-            Ok(image) => (image.width().max(1), image.height().max(1), image.into_raw()),
+            Ok(image) => (
+                image.width().max(1),
+                image.height().max(1),
+                image.into_raw(),
+            ),
             Err(error) => {
                 tracing::warn!(
                     "Could not load material preview texture '{}': {}",
-                    resolved_path.display(), error
+                    resolved_path.display(),
+                    error
                 );
                 (1, 1, vec![255, 255, 255, 255])
             }
@@ -712,7 +717,11 @@ impl PreviewRenderer {
                 time: elapsed,
                 _padding: [0.0; 3],
             };
-            queue.write_buffer(self.uniform_buffer.as_ref().unwrap(), 0, bytemuck::bytes_of(&uniforms));
+            queue.write_buffer(
+                self.uniform_buffer.as_ref().unwrap(),
+                0,
+                bytemuck::bytes_of(&uniforms),
+            );
         }
 
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {

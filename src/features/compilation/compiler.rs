@@ -1,6 +1,6 @@
 //! Compiler - Compile shader graphs to WGSL code via PSGC
 
-use crate::editor::panel::{ShaderEditorPanel, CompilationHistoryEntry};
+use crate::editor::panel::{CompilationHistoryEntry, ShaderEditorPanel};
 use crate::{CompilationState, CompilationStatus};
 use gpui::*;
 
@@ -33,7 +33,8 @@ impl ShaderEditorPanel {
 
     /// Compile to WGSL via PSGC
     pub fn compile_to_wgsl(&self) -> Result<String, String> {
-        let main_tab = self.open_tabs
+        let main_tab = self
+            .open_tabs
             .iter()
             .find(|tab| tab.is_main)
             .or_else(|| self.open_tabs.first())
@@ -53,17 +54,22 @@ impl ShaderEditorPanel {
             nodes: Vec<serde_json::Value>,
         }
 
-        let main_tab = self.open_tabs
+        let main_tab = self
+            .open_tabs
             .iter()
             .find(|t| t.is_main)
             .unwrap_or(&self.open_tabs[0]);
 
-        let nodes: Vec<serde_json::Value> = graph.nodes.values().map(|n| {
-            serde_json::json!({
-                "id": n.id,
-                "node_type": n.node_type,
+        let nodes: Vec<serde_json::Value> = graph
+            .nodes
+            .values()
+            .map(|n| {
+                serde_json::json!({
+                    "id": n.id,
+                    "node_type": n.node_type,
+                })
             })
-        }).collect();
+            .collect();
 
         let dump = ShaderDebugDump {
             active_tab: main_tab.name.clone(),
@@ -128,7 +134,11 @@ impl ShaderEditorPanel {
                         CompilationState::Success,
                         "complete",
                         "Compilation successful",
-                        Some(format!("Duration: {} ms | WGSL output: {} bytes", elapsed_ms, wgsl_code.len())),
+                        Some(format!(
+                            "Duration: {} ms | WGSL output: {} bytes",
+                            elapsed_ms,
+                            wgsl_code.len()
+                        )),
                     );
 
                     cx.notify();

@@ -495,8 +495,13 @@ fn lower_texture_sources(
             continue;
         };
 
-        for pin in blueprint_node.inputs.iter().filter(|pin| pin.data_type.type_name == "TextureSrc") {
-            let Some(graph_pin) = graph_node.inputs.iter_mut().find(|item| item.id == pin.id) else {
+        for pin in blueprint_node
+            .inputs
+            .iter()
+            .filter(|pin| pin.data_type.type_name == "TextureSrc")
+        {
+            let Some(graph_pin) = graph_node.inputs.iter_mut().find(|item| item.id == pin.id)
+            else {
                 continue;
             };
             graph_pin.pin.data_type = psgc::DataType::typed("texture_2d<f32>");
@@ -515,7 +520,10 @@ fn lower_texture_sources(
                     blueprint_node.title
                 ))?;
             let resource_name = format!("pulsar_texture_{}", declarations.len());
-            graph_node.properties.insert(pin.id.clone(), serde_json::Value::String(resource_name.clone()));
+            graph_node.properties.insert(
+                pin.id.clone(),
+                serde_json::Value::String(resource_name.clone()),
+            );
             declarations.push(format!(
                 "// TextureSrc: {}\n@group(1) @binding({}) var {}: texture_2d<f32>;\n",
                 serde_json::to_string(path).unwrap_or_else(|_| "\"\"".into()),
@@ -528,16 +536,16 @@ fn lower_texture_sources(
     }
 
     if needs_sampler {
-        declarations.insert(0, "@group(1) @binding(0) var texture_sampler: sampler;\n".into());
+        declarations.insert(
+            0,
+            "@group(1) @binding(0) var texture_sampler: sampler;\n".into(),
+        );
     }
 
     Ok(declarations.join(""))
 }
 
-fn property_to_psgc_value(
-    value: &str,
-    is_input_property: bool,
-) -> Option<serde_json::Value> {
+fn property_to_psgc_value(value: &str, is_input_property: bool) -> Option<serde_json::Value> {
     let value = value.trim();
     if is_input_property && value.is_empty() {
         return None;
@@ -627,7 +635,9 @@ fn wrap_vec3_preview_return(wgsl: &str) -> Result<String, String> {
             let first_arg = after[..comma].trim();
             return Ok(format!(
                 "{}return vec4<f32>({}, 1.0){}",
-                before, first_arg, &after[comma..]
+                before,
+                first_arg,
+                &after[comma..]
             ));
         }
         // Single-value struct (shouldn't happen with current PBR output,
