@@ -77,7 +77,13 @@ fn compile_material_graph(mut graph: GraphDescription) -> Result<String, String>
 }
 
 fn render_first_frame(wgsl: &str) -> Option<RgbaImage> {
-    smol::block_on(async { render_first_frame_async(wgsl).await }).ok()
+    match smol::block_on(async { render_first_frame_async(wgsl).await }) {
+        Ok(image) => Some(image),
+        Err(error) => {
+            tracing::warn!("Material thumbnail render failed: {error}");
+            None
+        }
+    }
 }
 
 async fn render_first_frame_async(wgsl: &str) -> Result<RgbaImage, String> {
@@ -200,5 +206,93 @@ fn config_size(config: &wgpu::SurfaceConfiguration) -> wgpu::Extent3d {
         width: config.width,
         height: config.height,
         depth_or_array_layers: 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_material_thumbnail;
+    use crate::core::definitions::NodeDefinitions;
+    use crate::io::formats::{serialize_shader_with_header, ShaderAsset};
+    use psgc::{
+        Connection, ConnectionType, DataType, GraphDescription, NodeInstance, Pin, PinInstance,
+        PinType, Position,
+    };
+    use std::path::PathBuf;
+
+    fn graph_node(id: &str) -> NodeInstance {
+        let definition = NodeDefinitions::load()
+            .get_node_definition(id)
+            .unwrap_or_else(|| panic!("missing test node definition: {id}"));
+        let mut node = NodeInstance::new(id, id, Position { x: 0.0, y: 0.0 });
+        for input in &definition.inputs {
+            let data_type = if input.data_type.is_execution() {
+                DataType::Exec
+            } else {
+                DataType::typed(input.data_type.type_name.clone())
+            };
+            node.inputs.push(PinInstance::new(
+                input.id.clone(),
+                Pin::new(
+                    input.id.clone(),
+                    input.name.clone(),
+                    data_type,
+                    PinType::Input,
+                ),
+            ));
+        }
+        for output in &definition.outputs {
+            let data_type = if output.data_type.is_execution() {
+                DataType::Exec
+            } else {
+                DataType::typed(output.data_type.type_name.clone())
+            };
+            node.outputs.push(PinInstance::new(
+                output.id.clone(),
+                Pin::new(
+                    output.id.clone(),
+                    output.name.clone(),
+                    data_type,
+                    PinType::Output,
+                ),
+            ));
+        }
+        node
+    }
+
+    #[test]
+    #[ignore = "requires a headless WGPU adapter; run explicitly for material thumbnail smoke validation"]
+    fn saved_material_renders_its_first_frame_on_the_preview_sphere() {
+        let mut graph = GraphDescription::new("thumbnail smoke test");
+        let mut color = graph_node("constant_vec4");
+        color.properties.insert("x".into(), serde_json::json!(1.0));
+        color.properties.insert("y".into(), serde_json::json!(0.0));
+        color.properties.insert("z".into(), serde_json::json!(1.0));
+        color.properties.insert("w".into(), serde_json::json!(1.0));
+        graph.add_node(color);
+        graph.add_node(graph_node("fragment_output"));
+        graph.add_connection(Connection::new(
+            "constant_vec4",
+            "result",
+            "fragment_output",
+            "base_color",
+            ConnectionType::Data,
+        ));
+
+        let asset = ShaderAsset::from_components(graph, None);
+        let serialized = serialize_shader_with_header(&asset).expect("serialize test material");
+        let path = std::env::temp_dir().join(format!(
+            "pulsar-material-thumbnail-{}.material",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&path, serialized).expect("write test material");
+
+        let thumbnail = render_material_thumbnail(&path);
+        let _ = std::fs::remove_file(PathBuf::from(&path));
+        let thumbnail = thumbnail.expect("material hook should render the test material");
+        assert_eq!(thumbnail.dimensions(), (128, 128));
+        assert!(thumbnail
+            .pixels()
+            .any(|pixel| pixel[0] > 180 && pixel[2] > 180 && pixel[1] < 80));
     }
 }
