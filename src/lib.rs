@@ -124,6 +124,8 @@ impl EditorPlugin for ShaderEditorPlugin {
                     "category": "Uncategorized"
                 }
             }),
+            creation_directory: None,
+
             categories: vec!["Shaders".to_string()],
         }]
     }
