@@ -312,6 +312,7 @@ pub struct PreviewRenderer {
     sky_pipeline: Option<RenderPipeline>,
     sky_uniform_buffer: Option<Buffer>,
     sky_bind_group: Option<BindGroup>,
+    plain_black_background: bool,
     pub camera: OrbitCamera,
     shader_module: Option<ShaderModule>,
     surface_config: Option<SurfaceConfiguration>,
@@ -339,6 +340,7 @@ impl PreviewRenderer {
             sky_pipeline: None,
             sky_uniform_buffer: None,
             sky_bind_group: None,
+            plain_black_background: false,
             camera: OrbitCamera {
                 yaw: 0.0,
                 pitch: 0.4,
@@ -645,6 +647,11 @@ impl PreviewRenderer {
         self.camera.aspect = aspect;
     }
 
+    /// Use a solid black backdrop for generated asset thumbnails.
+    pub fn set_plain_black_background(&mut self, enabled: bool) {
+        self.plain_black_background = enabled;
+    }
+
     pub fn render(&self, output: &TextureView) {
         self.render_at_time(output, self.start_time.elapsed().as_secs_f32());
     }
@@ -653,15 +660,9 @@ impl PreviewRenderer {
     pub fn render_at_time(&self, output: &TextureView, elapsed: f32) {
         let Some(device) = &self.device else { return };
         let Some(queue) = &self.queue else { return };
-        let Some(sky_pipeline) = &self.sky_pipeline else {
-            return;
-        };
-        let Some(sky_uniform_buffer) = &self.sky_uniform_buffer else {
-            return;
-        };
-        let Some(sky_bind_group) = &self.sky_bind_group else {
-            return;
-        };
+        let sky_pipeline = self.sky_pipeline.as_ref();
+        let sky_uniform_buffer = self.sky_uniform_buffer.as_ref();
+        let sky_bind_group = self.sky_bind_group.as_ref();
 
         let view = self.camera.view_matrix();
         let proj = self.camera.projection_matrix();
@@ -694,7 +695,14 @@ impl PreviewRenderer {
                 0.0,
             ],
         };
-        queue.write_buffer(sky_uniform_buffer, 0, bytemuck::bytes_of(&sky_uniforms));
+        if !self.plain_black_background {
+            let (Some(sky_uniform_buffer), Some(_), Some(_)) =
+                (sky_uniform_buffer, sky_pipeline, sky_bind_group)
+            else {
+                return;
+            };
+            queue.write_buffer(sky_uniform_buffer, 0, bytemuck::bytes_of(&sky_uniforms));
+        }
 
         // Only draw the material mesh once both the compiled-shader pipeline
         // and the mesh geometry are uploaded; the sky still renders on its
@@ -739,11 +747,15 @@ impl PreviewRenderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: Operations {
-                        load: LoadOp::Clear(Color {
-                            r: 0.1,
-                            g: 0.1,
-                            b: 0.1,
-                            a: 1.0,
+                        load: LoadOp::Clear(if self.plain_black_background {
+                            Color::BLACK
+                        } else {
+                            Color {
+                                r: 0.1,
+                                g: 0.1,
+                                b: 0.1,
+                                a: 1.0,
+                            }
                         }),
                         store: StoreOp::Store,
                     },
@@ -754,10 +766,17 @@ impl PreviewRenderer {
                 multiview_mask: None,
             });
 
-            // Sky/horizon gradient first, covering the whole viewport.
-            rpass.set_pipeline(sky_pipeline);
-            rpass.set_bind_group(0, sky_bind_group, &[]);
-            rpass.draw(0..3, 0..1);
+            // Keep the editor preview's sky, but make generated thumbnails
+            // use the same predictable solid black used by the asset browser.
+            if !self.plain_black_background {
+                let (Some(sky_pipeline), Some(sky_bind_group)) = (sky_pipeline, sky_bind_group)
+                else {
+                    return;
+                };
+                rpass.set_pipeline(sky_pipeline);
+                rpass.set_bind_group(0, sky_bind_group, &[]);
+                rpass.draw(0..3, 0..1);
+            }
 
             if mesh_ready {
                 let pipeline = self.pipeline.as_ref().unwrap();

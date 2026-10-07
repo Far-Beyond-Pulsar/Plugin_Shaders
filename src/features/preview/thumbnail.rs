@@ -123,6 +123,7 @@ async fn render_first_frame_async(wgsl: &str) -> Result<RgbaImage, String> {
     };
 
     let mut renderer = PreviewRenderer::new();
+    renderer.set_plain_black_background(true);
     renderer.initialize(&device, &queue, &config);
     renderer.update_shader(wgsl);
     if !renderer.has_material_pipeline() {
