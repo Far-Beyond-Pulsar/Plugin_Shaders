@@ -646,6 +646,11 @@ impl PreviewRenderer {
     }
 
     pub fn render(&self, output: &TextureView) {
+        self.render_at_time(output, self.start_time.elapsed().as_secs_f32());
+    }
+
+    /// Render with an explicit shader time so saved thumbnails can capture a deterministic first frame.
+    pub fn render_at_time(&self, output: &TextureView, elapsed: f32) {
         let Some(device) = &self.device else { return };
         let Some(queue) = &self.queue else { return };
         let Some(sky_pipeline) = &self.sky_pipeline else {
@@ -657,8 +662,6 @@ impl PreviewRenderer {
         let Some(sky_bind_group) = &self.sky_bind_group else {
             return;
         };
-
-        let elapsed = self.start_time.elapsed().as_secs_f32();
 
         let view = self.camera.view_matrix();
         let proj = self.camera.projection_matrix();
@@ -774,6 +777,10 @@ impl PreviewRenderer {
         }
 
         queue.submit(Some(encoder.finish()));
+    }
+
+    pub fn has_material_pipeline(&self) -> bool {
+        self.pipeline.is_some()
     }
 
     pub fn resize(&mut self, width: u32, height: u32, config: &SurfaceConfiguration) {

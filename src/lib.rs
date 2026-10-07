@@ -128,6 +128,10 @@ impl EditorPlugin for ShaderEditorPlugin {
 
     fn on_load(&mut self) {
         crate::features::initialize_features();
+        engine_fs::thumbnails::register_thumbnail_renderer(
+            "material",
+            crate::features::preview::thumbnail::render_material_thumbnail,
+        );
         log::info!("Shader Graph Editor Plugin loaded");
     }
 }

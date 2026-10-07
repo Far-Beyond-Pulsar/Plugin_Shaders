@@ -598,8 +598,8 @@ fn preview_wgsl_requires_external_resources(wgsl: &str) -> bool {
         || wgsl.contains("textureSampleGrad(")
         || wgsl.contains("texture_2d<")
         || wgsl.contains(": sampler");
-    // PinPreviewRenderer can now bind TextureSrc assets. Other external
-    // resources still lack a preview binding and must use the safe fallback.
+    // PinPreviewRenderer can bind TextureSrc assets. Other external resources
+    // still lack a preview binding and use the safe fallback.
     uses_external_resource && !wgsl.contains("// TextureSrc:")
 }
 
