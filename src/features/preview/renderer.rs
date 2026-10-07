@@ -166,13 +166,141 @@ struct SkyUniforms {
     params: [f32; 4],
 }
 
+fn texture_source_paths(wgsl: &str) -> Vec<String> {
+    wgsl.lines()
+        .filter_map(|line| line.trim().strip_prefix("// TextureSrc:"))
+        .filter_map(|path| serde_json::from_str::<String>(path.trim()).ok())
+        .collect()
+}
+
+fn create_texture_bindings(
+    device: &Device,
+    queue: &Queue,
+    asset_paths: &[String],
+) -> (BindGroupLayout, BindGroup, Vec<Texture>) {
+    let mut entries = Vec::with_capacity(asset_paths.len() + 1);
+    entries.push(BindGroupLayoutEntry {
+        binding: 0,
+        visibility: ShaderStages::FRAGMENT,
+        ty: BindingType::Sampler(SamplerBindingType::Filtering),
+        count: None,
+    });
+    for index in 0..asset_paths.len() {
+        entries.push(BindGroupLayoutEntry {
+            binding: index as u32 + 1,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Texture {
+                sample_type: TextureSampleType::Float { filterable: true },
+                view_dimension: TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        });
+    }
+    let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some("material texture bindings"),
+        entries: &entries,
+    });
+
+    let project_root = engine_state::get_project_path().map(std::path::PathBuf::from);
+    let mut textures = Vec::with_capacity(asset_paths.len());
+    let mut views = Vec::with_capacity(asset_paths.len());
+    for (index, asset_path) in asset_paths.iter().enumerate() {
+        let relative_path = std::path::Path::new(asset_path);
+        let resolved_path = if relative_path.is_absolute() {
+            relative_path.to_path_buf()
+        } else {
+            project_root
+                .as_ref()
+                .map(|root| root.join(relative_path))
+                .unwrap_or_else(|| relative_path.to_path_buf())
+        };
+        let decoded = image::open(&resolved_path).map(|image| image.to_rgba8());
+        let (width, height, pixels) = match decoded {
+            Ok(image) => (image.width().max(1), image.height().max(1), image.into_raw()),
+            Err(error) => {
+                tracing::warn!(
+                    "Could not load material preview texture '{}': {}",
+                    resolved_path.display(), error
+                );
+                (1, 1, vec![255, 255, 255, 255])
+            }
+        };
+        let texture = device.create_texture(&TextureDescriptor {
+            label: Some(&format!("material preview texture {index}")),
+            size: Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8UnormSrgb,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            &pixels,
+            TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+            Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        views.push(texture.create_view(&TextureViewDescriptor::default()));
+        textures.push(texture);
+    }
+
+    let sampler = device.create_sampler(&SamplerDescriptor {
+        label: Some("material preview sampler"),
+        mag_filter: FilterMode::Linear,
+        min_filter: FilterMode::Linear,
+        mipmap_filter: MipmapFilterMode::Linear,
+        ..Default::default()
+    });
+    let mut bind_entries = Vec::with_capacity(views.len() + 1);
+    bind_entries.push(BindGroupEntry {
+        binding: 0,
+        resource: BindingResource::Sampler(&sampler),
+    });
+    for (index, view) in views.iter().enumerate() {
+        bind_entries.push(BindGroupEntry {
+            binding: index as u32 + 1,
+            resource: BindingResource::TextureView(view),
+        });
+    }
+    let bind_group = device.create_bind_group(&BindGroupDescriptor {
+        label: Some("material preview texture bind group"),
+        layout: &layout,
+        entries: &bind_entries,
+    });
+
+    (layout, bind_group, textures)
+}
+
 pub struct PreviewRenderer {
     pub device: Option<Device>,
     pub queue: Option<Queue>,
     pipeline: Option<RenderPipeline>,
     pipeline_layout: Option<PipelineLayout>,
     uniform_buffer: Option<Buffer>,
+    uniform_bind_group_layout: Option<BindGroupLayout>,
     bind_group: Option<BindGroup>,
+    texture_bind_group_layout: Option<BindGroupLayout>,
+    texture_bind_group: Option<BindGroup>,
+    _texture_assets: Vec<Texture>,
     pub mesh_vertex_buffer: Option<Buffer>,
     pub mesh_index_buffer: Option<Buffer>,
     pub mesh_index_count: u32,
@@ -195,7 +323,11 @@ impl PreviewRenderer {
             pipeline: None,
             pipeline_layout: None,
             uniform_buffer: None,
+            uniform_bind_group_layout: None,
             bind_group: None,
+            texture_bind_group_layout: None,
+            texture_bind_group: None,
+            _texture_assets: Vec::new(),
             mesh_vertex_buffer: None,
             mesh_index_buffer: None,
             mesh_index_count: 0,
@@ -247,6 +379,7 @@ impl PreviewRenderer {
                 count: None,
             }],
         });
+        self.uniform_bind_group_layout = Some(bind_group_layout.clone());
 
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("preview pipeline layout"),
@@ -356,6 +489,42 @@ impl PreviewRenderer {
             // User-authored graphs must not route validation failures through
             // WGPU's uncaptured-error handler, which panics the editor.
             let error_scope = device.push_error_scope(ErrorFilter::Validation);
+
+            let texture_sources = texture_source_paths(wgsl_source);
+            let texture_resources = if texture_sources.is_empty() {
+                None
+            } else {
+                Some(create_texture_bindings(
+                    device,
+                    self.queue.as_ref().expect("preview queue initialized"),
+                    &texture_sources,
+                ))
+            };
+            self._texture_assets = texture_resources
+                .as_ref()
+                .map(|(_, _, textures)| textures.iter().map(Texture::clone).collect())
+                .unwrap_or_default();
+            self.texture_bind_group_layout = texture_resources
+                .as_ref()
+                .map(|(layout, _, _)| layout.clone());
+            self.texture_bind_group = texture_resources
+                .as_ref()
+                .map(|(_, bind_group, _)| bind_group.clone());
+
+            let uniform_layout = self
+                .uniform_bind_group_layout
+                .as_ref()
+                .expect("preview renderer initialized before shader update");
+            let mut layouts = vec![Some(uniform_layout)];
+            if let Some((texture_layout, _, _)) = texture_resources.as_ref() {
+                layouts.push(Some(texture_layout));
+            }
+            let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("material preview pipeline layout"),
+                bind_group_layouts: &layouts,
+                immediate_size: 0,
+            });
+            self.pipeline_layout = Some(pipeline_layout);
 
             let vs_module = device.create_shader_module(ShaderModuleDescriptor {
                 label: Some("preview vertex shader"),
@@ -586,6 +755,9 @@ impl PreviewRenderer {
 
                 rpass.set_pipeline(pipeline);
                 rpass.set_bind_group(0, bind_group, &[]);
+                if let Some(texture_bind_group) = &self.texture_bind_group {
+                    rpass.set_bind_group(1, texture_bind_group, &[]);
+                }
                 rpass.set_vertex_buffer(0, vertex_buffer.slice(..));
                 rpass.set_index_buffer(index_buffer.slice(..), IndexFormat::Uint32);
                 rpass.draw_indexed(0..self.mesh_index_count, 0, 0..1);

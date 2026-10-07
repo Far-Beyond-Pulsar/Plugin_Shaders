@@ -75,6 +75,9 @@ impl PinDataType {
         if self.is_execution() {
             return [1.0, 0.0, 0.0, 1.0];
         }
+        if self.type_name == "TextureSrc" || self.type_name.starts_with("texture_") {
+            return [0.62, 0.34, 0.92, 1.0];
+        }
         return [1.0, 1.0, 1.0, 1.0];
     }
 

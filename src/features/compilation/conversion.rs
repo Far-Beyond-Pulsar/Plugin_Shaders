@@ -41,6 +41,20 @@ impl ShaderEditorPanel {
         self.convert_graph_to_description(graph)
     }
 
+    /// Compile a graph after lowering reflected texture asset references into
+    /// concrete WGSL texture bindings. The asset path stays on the graph pin;
+    /// the generated WGSL binds that pin to a stable per-graph resource name.
+    pub(crate) fn compile_graph_to_wgsl(
+        &self,
+        blueprint: &BlueprintGraph,
+    ) -> Result<String, String> {
+        let mut graph = self.convert_graph_to_description(blueprint)?;
+        let bindings = lower_texture_sources(&mut graph, blueprint)?;
+        let source = psgc::compile_shader(&graph)
+            .map_err(|error| format!("WGSL compilation failed: {error}"))?;
+        Ok(format!("{bindings}{source}"))
+    }
+
     /// Convert any blueprint graph to psgc GraphDescription
     pub(crate) fn convert_graph_to_description(
         &self,
@@ -406,6 +420,7 @@ impl ShaderEditorPanel {
         }
 
         let mut graph_desc = self.convert_graph_to_description(graph)?;
+        let texture_bindings = lower_texture_sources(&mut graph_desc, graph)?;
         graph_desc.nodes.retain(|_, node| {
             node.node_type != "fragment_output" && node.node_type != "vertex_output"
         });
@@ -452,6 +467,7 @@ impl ShaderEditorPanel {
 
         let mut wgsl = compile_fragment_shader(&graph_desc)
             .map_err(|e| format!("Preview WGSL compilation failed: {}", e))?;
+        wgsl.insert_str(0, &texture_bindings);
         if matches!(pin.data_type.type_name.as_str(), "vec3<f32>") {
             wgsl = wrap_vec3_preview_return(&wgsl)?;
         }
@@ -461,6 +477,61 @@ impl ShaderEditorPanel {
 
         Ok(wgsl)
     }
+}
+
+/// Convert TextureSrc's editor-facing asset path into the opaque resource
+/// expression expected by WGSL. These handles cannot be WGSL constants, so
+/// each unconnected TextureSrc pin becomes a module binding instead.
+fn lower_texture_sources(
+    graph: &mut GraphDescription,
+    blueprint: &BlueprintGraph,
+) -> Result<String, String> {
+    let mut declarations = Vec::new();
+    let mut next_binding = 1u32; // binding zero is the shared sampler
+    let mut needs_sampler = false;
+
+    for blueprint_node in &blueprint.nodes {
+        let Some(graph_node) = graph.nodes.get_mut(&blueprint_node.id) else {
+            continue;
+        };
+
+        for pin in blueprint_node.inputs.iter().filter(|pin| pin.data_type.type_name == "TextureSrc") {
+            let Some(graph_pin) = graph_node.inputs.iter_mut().find(|item| item.id == pin.id) else {
+                continue;
+            };
+            graph_pin.pin.data_type = psgc::DataType::typed("texture_2d<f32>");
+
+            let connected = blueprint.connections.iter().any(|connection| {
+                connection.target_node == blueprint_node.id && connection.target_pin == pin.id
+            });
+            if connected {
+                continue;
+            }
+
+            let path = blueprint_node.properties.get(&pin.id)
+                .map(|value| value.trim()).filter(|value| !value.is_empty())
+                .ok_or_else(|| format!(
+                    "Texture sample node '{}' has no texture selected. Choose an image asset in the Details panel.",
+                    blueprint_node.title
+                ))?;
+            let resource_name = format!("pulsar_texture_{}", declarations.len());
+            graph_node.properties.insert(pin.id.clone(), serde_json::Value::String(resource_name.clone()));
+            declarations.push(format!(
+                "// TextureSrc: {}\n@group(1) @binding({}) var {}: texture_2d<f32>;\n",
+                serde_json::to_string(path).unwrap_or_else(|_| "\"\"".into()),
+                next_binding,
+                resource_name,
+            ));
+            next_binding += 1;
+            needs_sampler = true;
+        }
+    }
+
+    if needs_sampler {
+        declarations.insert(0, "@group(1) @binding(0) var texture_sampler: sampler;\n".into());
+    }
+
+    Ok(declarations.join(""))
 }
 
 fn property_to_psgc_value(
@@ -513,11 +584,12 @@ mod property_conversion_tests {
 }
 
 fn preview_wgsl_requires_external_resources(wgsl: &str) -> bool {
-    wgsl.contains("textureSample(")
+    let uses_external_resource = wgsl.contains("textureSample(")
         || wgsl.contains("textureSampleLevel(")
         || wgsl.contains("textureSampleGrad(")
         || wgsl.contains("texture_2d<")
-        || wgsl.contains(": sampler")
+        || wgsl.contains(": sampler");
+    uses_external_resource && !wgsl.contains("// TextureSrc:")
 }
 
 fn unsupported_resource_preview_wgsl() -> String {

@@ -31,21 +31,14 @@ impl ShaderEditorPanel {
         }
     }
 
-    /// Convert the active graph to a psgc::GraphDescription
-    fn convert_graph_to_psgc(&self) -> Result<psgc::GraphDescription, String> {
-        let main_tab = self.open_tabs
-            .iter()
-            .find(|t| t.is_main)
-            .unwrap_or(&self.open_tabs[0]);
-
-        self.convert_graph_to_description(&main_tab.graph)
-    }
-
     /// Compile to WGSL via PSGC
     pub fn compile_to_wgsl(&self) -> Result<String, String> {
-        let graph = self.convert_graph_to_psgc()?;
-        let wgsl = psgc::compile_shader(&graph)
-            .map_err(|e| format!("WGSL compilation failed: {}", e))?;
+        let main_tab = self.open_tabs
+            .iter()
+            .find(|tab| tab.is_main)
+            .or_else(|| self.open_tabs.first())
+            .ok_or_else(|| "No shader graph is open".to_string())?;
+        let wgsl = self.compile_graph_to_wgsl(&main_tab.graph)?;
         validate_wgsl(&wgsl)?;
         Ok(wgsl)
     }
