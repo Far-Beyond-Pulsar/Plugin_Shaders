@@ -11,7 +11,12 @@ const THUMBNAIL_SIZE: u32 = 128;
 /// Render a saved `.material` file using the first frame of its shader on the
 /// editor's sphere preview mesh. Registered with `engine_fs` by the plugin.
 pub fn render_material_thumbnail(path: &Path) -> Option<RgbaImage> {
-    let contents = std::fs::read_to_string(path).ok()?;
+    let graph_path = if path.is_dir() {
+        path.join("shader_graph_save.json")
+    } else {
+        path.to_path_buf()
+    };
+    let contents = std::fs::read_to_string(&graph_path).ok()?;
     let asset = deserialize_shader(&contents).ok()?;
     let wgsl = compile_material_graph(asset.main_graph)
         .map_err(|error| {

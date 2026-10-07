@@ -71,6 +71,16 @@ impl Default for ShaderEditorPlugin {
     }
 }
 
+/// Register the renderer used by the built-in editor's directory-backed
+/// `.material` assets. Built-in providers do not pass through the dynamic
+/// plugin `on_load` lifecycle, so the editor host calls this during startup.
+pub fn register_material_thumbnail_renderer() {
+    engine_fs::thumbnails::register_thumbnail_renderer(
+        "material",
+        crate::features::preview::thumbnail::render_material_thumbnail,
+    );
+}
+
 impl EditorPlugin for ShaderEditorPlugin {
     fn metadata(&self) -> PluginMetadata {
         PluginMetadata {
@@ -128,10 +138,7 @@ impl EditorPlugin for ShaderEditorPlugin {
 
     fn on_load(&mut self) {
         crate::features::initialize_features();
-        engine_fs::thumbnails::register_thumbnail_renderer(
-            "material",
-            crate::features::preview::thumbnail::render_material_thumbnail,
-        );
+        register_material_thumbnail_renderer();
         log::info!("Shader Graph Editor Plugin loaded");
     }
 }
@@ -192,11 +199,7 @@ impl ShaderEditorPlugin {
             },
         );
 
-        log::info!(
-            "Created shader editor instance {} for {:?}",
-            id,
-            file_path
-        );
+        log::info!("Created shader editor instance {} for {:?}", id, file_path);
 
         Ok(panel_arc)
     }
