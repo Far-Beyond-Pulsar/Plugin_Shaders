@@ -527,9 +527,9 @@ impl GraphCanvasPanel {
                 wgsl.hash(&mut hasher);
                 let shader_hash = hasher.finish();
                 let (texture, view) = ensure_preview_texture(device);
-                let Ok(renderer) =
-                    catch_unwind(AssertUnwindSafe(|| PinPreviewRenderer::new(device, &wgsl)))
-                else {
+                let Ok(renderer) = catch_unwind(AssertUnwindSafe(|| {
+                    PinPreviewRenderer::new(device, queue, &wgsl)
+                })) else {
                     self.pin_preview_cache.remove(&request.cache_key);
                     continue;
                 };

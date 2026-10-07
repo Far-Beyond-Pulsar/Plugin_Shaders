@@ -60,12 +60,14 @@ pub struct PinPreviewRenderer {
     pipeline: RenderPipeline,
     uniform_buffer: Buffer,
     bind_group: BindGroup,
+    texture_bind_group: Option<BindGroup>,
+    _textures: Vec<Texture>,
 }
 
 impl PinPreviewRenderer {
     pub const TEXTURE_FORMAT: TextureFormat = TextureFormat::Bgra8UnormSrgb;
 
-    pub fn new(device: &Device, wgsl_source: &str) -> Self {
+    pub fn new(device: &Device, queue: &Queue, wgsl_source: &str) -> Self {
         let uniform_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("pin_preview_uniforms"),
             size: std::mem::size_of::<PreviewUniforms>() as u64,
@@ -96,9 +98,23 @@ impl PinPreviewRenderer {
             }],
         });
 
+        let texture_sources = texture_source_paths(wgsl_source);
+        let (texture_bind_group_layout, texture_bind_group, textures) =
+            if texture_sources.is_empty() {
+                (None, None, Vec::new())
+            } else {
+                let (layout, bind_group, textures) =
+                    create_texture_bindings(device, queue, &texture_sources);
+                (Some(layout), Some(bind_group), textures)
+            };
+
+        let mut bind_group_layouts = vec![Some(&bind_group_layout)];
+        if let Some(texture_layout) = texture_bind_group_layout.as_ref() {
+            bind_group_layouts.push(Some(texture_layout));
+        }
         let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("pin_preview_pipeline_layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
+            bind_group_layouts: &bind_group_layouts,
             immediate_size: 0,
         });
 
@@ -141,6 +157,8 @@ impl PinPreviewRenderer {
             pipeline,
             uniform_buffer,
             bind_group,
+            texture_bind_group,
+            _textures: textures,
         }
     }
 
@@ -187,9 +205,145 @@ impl PinPreviewRenderer {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
+            if let Some(texture_bind_group) = &self.texture_bind_group {
+                pass.set_bind_group(1, texture_bind_group, &[]);
+            }
             pass.draw(0..6, 0..1);
         }
 
         queue.submit(std::iter::once(encoder.finish()));
     }
+}
+
+fn texture_source_paths(wgsl: &str) -> Vec<String> {
+    wgsl.lines()
+        .filter_map(|line| line.trim().strip_prefix("// TextureSrc:"))
+        .filter_map(|path| serde_json::from_str::<String>(path.trim()).ok())
+        .collect()
+}
+
+fn create_texture_bindings(
+    device: &Device,
+    queue: &Queue,
+    asset_paths: &[String],
+) -> (BindGroupLayout, BindGroup, Vec<Texture>) {
+    let mut layout_entries = Vec::with_capacity(asset_paths.len() + 1);
+    layout_entries.push(BindGroupLayoutEntry {
+        binding: 0,
+        visibility: ShaderStages::FRAGMENT,
+        ty: BindingType::Sampler(SamplerBindingType::Filtering),
+        count: None,
+    });
+    for index in 0..asset_paths.len() {
+        layout_entries.push(BindGroupLayoutEntry {
+            binding: index as u32 + 1,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Texture {
+                sample_type: TextureSampleType::Float { filterable: true },
+                view_dimension: TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        });
+    }
+    let layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+        label: Some("pin_preview_texture_bind_group_layout"),
+        entries: &layout_entries,
+    });
+
+    let project_root = engine_state::get_project_path().map(std::path::PathBuf::from);
+    let mut textures = Vec::with_capacity(asset_paths.len());
+    let mut views = Vec::with_capacity(asset_paths.len());
+    for (index, asset_path) in asset_paths.iter().enumerate() {
+        let relative_path = std::path::Path::new(asset_path);
+        let resolved_path = if relative_path.is_absolute() {
+            relative_path.to_path_buf()
+        } else {
+            project_root
+                .as_ref()
+                .map(|root| root.join(relative_path))
+                .unwrap_or_else(|| relative_path.to_path_buf())
+        };
+        let (width, height, pixels) = match image::open(&resolved_path) {
+            Ok(image) => {
+                let image = image.to_rgba8();
+                (
+                    image.width().max(1),
+                    image.height().max(1),
+                    image.into_raw(),
+                )
+            }
+            Err(error) => {
+                tracing::warn!(
+                    "Could not load pin preview texture '{}': {}",
+                    resolved_path.display(),
+                    error
+                );
+                (1, 1, vec![255, 255, 255, 255])
+            }
+        };
+        let texture = device.create_texture(&TextureDescriptor {
+            label: Some("pin_preview_source_texture"),
+            size: Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: TextureDimension::D2,
+            format: TextureFormat::Rgba8UnormSrgb,
+            usage: TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: Origin3d::ZERO,
+                aspect: TextureAspect::All,
+            },
+            &pixels,
+            TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+            Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+        );
+        views.push(texture.create_view(&TextureViewDescriptor::default()));
+        textures.push(texture);
+    }
+
+    let sampler = device.create_sampler(&SamplerDescriptor {
+        label: Some("pin_preview_texture_sampler"),
+        address_mode_u: AddressMode::Repeat,
+        address_mode_v: AddressMode::Repeat,
+        address_mode_w: AddressMode::Repeat,
+        mag_filter: FilterMode::Linear,
+        min_filter: FilterMode::Linear,
+        mipmap_filter: MipmapFilterMode::Linear,
+        ..Default::default()
+    });
+    let mut entries = Vec::with_capacity(views.len() + 1);
+    entries.push(BindGroupEntry {
+        binding: 0,
+        resource: BindingResource::Sampler(&sampler),
+    });
+    for (index, view) in views.iter().enumerate() {
+        entries.push(BindGroupEntry {
+            binding: index as u32 + 1,
+            resource: BindingResource::TextureView(view),
+        });
+    }
+    let bind_group = device.create_bind_group(&BindGroupDescriptor {
+        label: Some("pin_preview_texture_bind_group"),
+        layout: &layout,
+        entries: &entries,
+    });
+    (layout, bind_group, textures)
 }
