@@ -210,7 +210,14 @@ impl ClipboardData {
                     icon: snode.icon.clone(),
                     node_type: snode.node_type.clone(),
                     position: Point::new(snode.position.0 + offset.x, snode.position.1 + offset.y),
-                    size: Size::new(snode.size.0, snode.size.1),
+                    size: if snode.node_type == crate::core::types::NodeType::Reroute {
+                        Size::new(
+                            crate::core::types::REROUTE_NODE_SIZE,
+                            crate::core::types::REROUTE_NODE_SIZE,
+                        )
+                    } else {
+                        Size::new(snode.size.0, snode.size.1)
+                    },
                     inputs: snode
                         .inputs
                         .iter()

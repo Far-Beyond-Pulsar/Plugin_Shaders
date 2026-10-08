@@ -12,6 +12,10 @@ use ui::color_picker::ColorPickerState;
 use crate::core::graph_entity::GraphEntity;
 use crate::rendering::layout;
 
+/// Reroutes are connection anchors, so their visual and interaction footprint
+/// stays fixed regardless of the pins or data type connected to them.
+pub const REROUTE_NODE_SIZE: f32 = 28.0;
+
 // ============================================================================
 // Pin Data Type — canonical reflection-backed type representation
 // ============================================================================
@@ -398,7 +402,7 @@ impl BlueprintNode {
             icon: "•".to_string(),
             node_type: NodeType::Reroute,
             position,
-            size: Size::new(28.0, 28.0), // Custom-sized for reroute nodes
+            size: Size::new(REROUTE_NODE_SIZE, REROUTE_NODE_SIZE),
             inputs: vec![Pin {
                 id: "input".to_string(),
                 name: "".to_string(),

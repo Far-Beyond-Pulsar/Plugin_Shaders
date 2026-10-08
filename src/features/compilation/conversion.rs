@@ -216,17 +216,13 @@ impl ShaderEditorPanel {
                 )
             };
 
-            let bp_node = BlueprintNode {
-                id: node_id.clone(),
-                definition_id,
-                title,
-                icon,
-                node_type,
-                position: Point::new(
-                    node_instance.position.x as f32,
-                    node_instance.position.y as f32,
-                ),
-                size: crate::Size::new(
+            let size = if node_type == NodeType::Reroute {
+                crate::Size::new(
+                    crate::core::types::REROUTE_NODE_SIZE,
+                    crate::core::types::REROUTE_NODE_SIZE,
+                )
+            } else {
+                crate::Size::new(
                     layout::node_width_for_pins(
                         &node_instance
                             .outputs
@@ -279,7 +275,20 @@ impl ShaderEditorPanel {
                             })
                             .collect::<Vec<_>>(),
                     ),
+                )
+            };
+
+            let bp_node = BlueprintNode {
+                id: node_id.clone(),
+                definition_id,
+                title,
+                icon,
+                node_type,
+                position: Point::new(
+                    node_instance.position.x as f32,
+                    node_instance.position.y as f32,
                 ),
+                size,
                 inputs: node_instance
                     .inputs
                     .iter()
