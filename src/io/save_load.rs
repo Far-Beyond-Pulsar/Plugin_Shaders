@@ -226,7 +226,7 @@ impl ShaderEditorPanel {
             main_tab.graph.nodes.len(),
             main_tab.graph.connections.len(),
         );
-        let main_graph = self.convert_graph_to_description(&main_tab.graph)?;
+        let main_graph = Self::convert_graph_to_description(&main_tab.graph)?;
 
         let graph_view_states = self
             .open_tabs

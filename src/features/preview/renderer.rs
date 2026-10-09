@@ -321,6 +321,151 @@ pub struct PreviewRenderer {
     start_time: std::time::Instant,
 }
 
+
+/// Handles a shader build needs; see [`PreviewRenderer::shader_build_inputs`].
+#[derive(Clone)]
+pub struct ShaderBuildInputs {
+    device: Device,
+    queue: Queue,
+    uniform_layout: BindGroupLayout,
+    target_format: TextureFormat,
+}
+
+/// The GPU objects one compiled preview shader produces.
+pub struct ShaderBuild {
+    pipeline: Option<RenderPipeline>,
+    pipeline_layout: PipelineLayout,
+    texture_bind_group_layout: Option<BindGroupLayout>,
+    texture_bind_group: Option<BindGroup>,
+    texture_assets: Vec<Texture>,
+}
+
+/// Compile `wgsl_source` into a pipeline. Slow (shader compilation, texture
+/// decode); safe to call from any thread, so the editor never waits on it.
+///
+/// PSGC compiles each shader graph to a complete, self-contained
+/// `@fragment fn fragment_main(...)` module, used directly as the fragment
+/// shader rather than wrapped inside another function.
+pub fn build_shader(inputs: &ShaderBuildInputs, wgsl_source: &str) -> ShaderBuild {
+    let ShaderBuildInputs {
+        device,
+        queue,
+        uniform_layout,
+        target_format,
+    } = inputs;
+    // User-authored graphs must not route validation failures through
+    // WGPU's uncaptured-error handler, which panics the editor.
+    let error_scope = device.push_error_scope(ErrorFilter::Validation);
+
+    let texture_sources = texture_source_paths(wgsl_source);
+    let texture_resources = if texture_sources.is_empty() {
+        None
+    } else {
+        Some(create_texture_bindings(device, queue, &texture_sources))
+    };
+    let texture_assets = texture_resources
+        .as_ref()
+        .map(|(_, _, textures)| textures.iter().map(Texture::clone).collect())
+        .unwrap_or_default();
+    let texture_bind_group_layout = texture_resources
+        .as_ref()
+        .map(|(layout, _, _)| layout.clone());
+    let texture_bind_group = texture_resources
+        .as_ref()
+        .map(|(_, bind_group, _)| bind_group.clone());
+
+    let mut layouts = vec![Some(uniform_layout)];
+    if let Some((texture_layout, _, _)) = texture_resources.as_ref() {
+        layouts.push(Some(texture_layout));
+    }
+    let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+        label: Some("material preview pipeline layout"),
+        bind_group_layouts: &layouts,
+        immediate_size: 0,
+    });
+
+    let vs_module = device.create_shader_module(ShaderModuleDescriptor {
+        label: Some("preview vertex shader"),
+        source: ShaderSource::Wgsl(VERTEX_SHADER_SRC.into()),
+    });
+    let fs_module = device.create_shader_module(ShaderModuleDescriptor {
+        label: Some("preview fragment shader"),
+        source: ShaderSource::Wgsl(wgsl_source.into()),
+    });
+    let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+        label: Some("preview pipeline"),
+        // Use the bind group layout created in `initialize()` (and shared
+        // with the renderer's bind group) explicitly: `layout: None` would
+        // derive its own internal layout via shader reflection, a *different*
+        // layout object, incompatible with that bind group at draw time.
+        layout: Some(&pipeline_layout),
+        vertex: VertexState {
+            module: &vs_module,
+            entry_point: Some("vertex_main"),
+            compilation_options: PipelineCompilationOptions::default(),
+            buffers: &[Some(VertexBufferLayout {
+                array_stride: std::mem::size_of::<PreviewVertex>() as u64,
+                step_mode: VertexStepMode::Vertex,
+                attributes: &[
+                    VertexAttribute {
+                        format: VertexFormat::Float32x3,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x3,
+                        offset: 12,
+                        shader_location: 1,
+                    },
+                    VertexAttribute {
+                        format: VertexFormat::Float32x2,
+                        offset: 24,
+                        shader_location: 2,
+                    },
+                ],
+            })],
+        },
+        fragment: Some(FragmentState {
+            module: &fs_module,
+            entry_point: Some("fragment_main"),
+            compilation_options: PipelineCompilationOptions::default(),
+            targets: &[Some(ColorTargetState {
+                format: *target_format,
+                blend: Some(BlendState::ALPHA_BLENDING),
+                write_mask: ColorWrites::ALL,
+            })],
+        }),
+        primitive: PrimitiveState {
+            topology: PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: FrontFace::Ccw,
+            cull_mode: Some(Face::Back),
+            unclipped_depth: false,
+            polygon_mode: PolygonMode::Fill,
+            conservative: false,
+        },
+        depth_stencil: None,
+        multisample: MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+
+    let pipeline = match smol::block_on(error_scope.pop()) {
+        Some(error) => {
+            tracing::error!("Material preview pipeline rejected shader: {error}");
+            None
+        }
+        None => Some(pipeline),
+    };
+    ShaderBuild {
+        pipeline,
+        pipeline_layout,
+        texture_bind_group_layout,
+        texture_bind_group,
+        texture_assets,
+    }
+}
+
 impl PreviewRenderer {
     pub fn new() -> Self {
         Self {
@@ -488,129 +633,41 @@ impl PreviewRenderer {
         self.sky_pipeline = Some(sky_pipeline);
     }
 
+    /// What a shader build needs from the renderer. Everything here is a
+    /// cheap, `Send` handle, so the build can run on a worker thread while
+    /// the UI keeps drawing the previous pipeline.
+    pub fn shader_build_inputs(&self) -> Option<ShaderBuildInputs> {
+        Some(ShaderBuildInputs {
+            device: self.device.clone()?,
+            queue: self.queue.clone()?,
+            uniform_layout: self.uniform_bind_group_layout.clone()?,
+            target_format: self
+                .surface_config
+                .as_ref()
+                .map(|c| c.format)
+                .unwrap_or(TextureFormat::Bgra8Unorm),
+        })
+    }
+
+    /// Build and install a shader on the calling thread. Used where blocking
+    /// is fine (thumbnails); the interactive preview builds with
+    /// [`build_shader`] on a worker and installs with [`Self::apply_shader`].
     pub fn update_shader(&mut self, wgsl_source: &str) {
-        // PSGC compiles each shader graph to a complete, self-contained
-        // `@fragment fn fragment_main(...)` module — use it directly as the
-        // fragment shader rather than wrapping it inside another function.
-        if let Some(device) = &self.device {
-            // User-authored graphs must not route validation failures through
-            // WGPU's uncaptured-error handler, which panics the editor.
-            let error_scope = device.push_error_scope(ErrorFilter::Validation);
+        if let Some(inputs) = self.shader_build_inputs() {
+            self.apply_shader(build_shader(&inputs, wgsl_source));
+        }
+        self.needs_recompile = false;
+    }
 
-            let texture_sources = texture_source_paths(wgsl_source);
-            let texture_resources = if texture_sources.is_empty() {
-                None
-            } else {
-                Some(create_texture_bindings(
-                    device,
-                    self.queue.as_ref().expect("preview queue initialized"),
-                    &texture_sources,
-                ))
-            };
-            self._texture_assets = texture_resources
-                .as_ref()
-                .map(|(_, _, textures)| textures.iter().map(Texture::clone).collect())
-                .unwrap_or_default();
-            self.texture_bind_group_layout = texture_resources
-                .as_ref()
-                .map(|(layout, _, _)| layout.clone());
-            self.texture_bind_group = texture_resources
-                .as_ref()
-                .map(|(_, bind_group, _)| bind_group.clone());
-
-            let uniform_layout = self
-                .uniform_bind_group_layout
-                .as_ref()
-                .expect("preview renderer initialized before shader update");
-            let mut layouts = vec![Some(uniform_layout)];
-            if let Some((texture_layout, _, _)) = texture_resources.as_ref() {
-                layouts.push(Some(texture_layout));
-            }
-            let pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("material preview pipeline layout"),
-                bind_group_layouts: &layouts,
-                immediate_size: 0,
-            });
-            self.pipeline_layout = Some(pipeline_layout);
-
-            let vs_module = device.create_shader_module(ShaderModuleDescriptor {
-                label: Some("preview vertex shader"),
-                source: ShaderSource::Wgsl(VERTEX_SHADER_SRC.into()),
-            });
-
-            let fs_module = device.create_shader_module(ShaderModuleDescriptor {
-                label: Some("preview fragment shader"),
-                source: ShaderSource::Wgsl(wgsl_source.into()),
-            });
-
-            let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-                label: Some("preview pipeline"),
-                // Use the bind group layout created in `initialize()` (and
-                // shared with `self.bind_group`) explicitly — `layout: None`
-                // would derive its own internal layout via shader
-                // reflection, which is a *different* layout object and is
-                // incompatible with `self.bind_group` at draw time.
-                layout: self.pipeline_layout.as_ref(),
-                vertex: VertexState {
-                    module: &vs_module,
-                    entry_point: Some("vertex_main"),
-                    compilation_options: PipelineCompilationOptions::default(),
-                    buffers: &[Some(VertexBufferLayout {
-                        array_stride: std::mem::size_of::<PreviewVertex>() as u64,
-                        step_mode: VertexStepMode::Vertex,
-                        attributes: &[
-                            VertexAttribute {
-                                format: VertexFormat::Float32x3,
-                                offset: 0,
-                                shader_location: 0,
-                            },
-                            VertexAttribute {
-                                format: VertexFormat::Float32x3,
-                                offset: 12,
-                                shader_location: 1,
-                            },
-                            VertexAttribute {
-                                format: VertexFormat::Float32x2,
-                                offset: 24,
-                                shader_location: 2,
-                            },
-                        ],
-                    })],
-                },
-                fragment: Some(FragmentState {
-                    module: &fs_module,
-                    entry_point: Some("fragment_main"),
-                    compilation_options: PipelineCompilationOptions::default(),
-                    targets: &[Some(ColorTargetState {
-                        format: self
-                            .surface_config
-                            .as_ref()
-                            .map(|c| c.format)
-                            .unwrap_or(TextureFormat::Bgra8Unorm),
-                        blend: Some(BlendState::ALPHA_BLENDING),
-                        write_mask: ColorWrites::ALL,
-                    })],
-                }),
-                primitive: PrimitiveState {
-                    topology: PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: FrontFace::Ccw,
-                    cull_mode: Some(Face::Back),
-                    unclipped_depth: false,
-                    polygon_mode: PolygonMode::Fill,
-                    conservative: false,
-                },
-                depth_stencil: None,
-                multisample: MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            });
-
-            if let Some(error) = smol::block_on(error_scope.pop()) {
-                tracing::error!("Material preview pipeline rejected shader: {error}");
-            } else {
-                self.pipeline = Some(pipeline);
-            }
+    /// Install a finished [`ShaderBuild`]. A shader the GPU rejected keeps
+    /// the previous pipeline on screen.
+    pub fn apply_shader(&mut self, build: ShaderBuild) {
+        self._texture_assets = build.texture_assets;
+        self.texture_bind_group_layout = build.texture_bind_group_layout;
+        self.texture_bind_group = build.texture_bind_group;
+        self.pipeline_layout = Some(build.pipeline_layout);
+        if let Some(pipeline) = build.pipeline {
+            self.pipeline = Some(pipeline);
         }
         self.needs_recompile = false;
     }
@@ -805,5 +862,83 @@ impl PreviewRenderer {
     pub fn resize(&mut self, width: u32, height: u32, config: &SurfaceConfiguration) {
         self.surface_config = Some(config.clone());
         self.camera.aspect = width as f32 / height as f32;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GOOD_FRAGMENT: &str = r#"
+struct FragmentInput {
+    @location(0) uv: vec2<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) world_pos: vec3<f32>,
+};
+@fragment
+fn fragment_main(input: FragmentInput) -> @location(0) vec4<f32> {
+    return vec4<f32>(input.uv, 0.0, 1.0);
+}
+"#;
+
+    /// A type error, as a half-edited graph can produce.
+    const BAD_FRAGMENT: &str = r#"
+@fragment
+fn fragment_main() -> @location(0) vec4<f32> {
+    return vec4<f32>("not a number");
+}
+"#;
+
+    fn inputs() -> ShaderBuildInputs {
+        let instance = Instance::new(InstanceDescriptor::new_without_display_handle());
+        let adapter = smol::block_on(instance.request_adapter(&RequestAdapterOptions::default()))
+            .expect("GPU adapter required");
+        let (device, queue) =
+            smol::block_on(adapter.request_device(&DeviceDescriptor::default())).unwrap();
+        let uniform_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        ShaderBuildInputs {
+            device,
+            queue,
+            uniform_layout,
+            target_format: TextureFormat::Bgra8Unorm,
+        }
+    }
+
+    /// The build runs on a worker thread (so the editor never waits on shader
+    /// compilation), and a shader the GPU rejects is reported as "no
+    /// pipeline" instead of reaching wgpu's panicking error handler.
+    #[test]
+    fn shader_builds_run_off_thread_and_rejected_shaders_do_not_panic() {
+        let inputs = inputs();
+        let caller = std::thread::current().id();
+
+        let worker_inputs = inputs.clone();
+        let (worker, good) = std::thread::spawn(move || {
+            (
+                std::thread::current().id(),
+                build_shader(&worker_inputs, GOOD_FRAGMENT),
+            )
+        })
+        .join()
+        .expect("a valid shader builds on a worker");
+        assert_ne!(worker, caller);
+        assert!(good.pipeline.is_some(), "a valid shader yields a pipeline");
+
+        let bad = std::thread::spawn(move || build_shader(&inputs, BAD_FRAGMENT))
+            .join()
+            .expect("a rejected shader must not panic the worker");
+        assert!(bad.pipeline.is_none(), "a rejected shader yields no pipeline");
     }
 }

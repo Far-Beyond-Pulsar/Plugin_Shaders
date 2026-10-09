@@ -23,7 +23,7 @@ use ui::PixelsExt;
 
 use crate::core::graph::BlueprintGraph;
 use crate::core::types::{BlueprintComment, BlueprintNode, Connection, NodeType};
-use crate::editor::workspace_panels::{GraphCanvasPanel, PinPreviewCacheEntry};
+use crate::editor::workspace_panels::{GraphCanvasPanel, PendingPinPreview, PinPreviewCacheEntry};
 use crate::rendering::gpu::{
     GraphUniforms, NodeInstance, PinInstance, PinPreviewRenderer, TexturePreview,
     TexturePreviewInstance, WireInstance, WireVertex,
@@ -484,6 +484,82 @@ fn ensure_preview_texture(device: &wgpu::Device) -> (wgpu::Texture, wgpu::Textur
 }
 
 impl GraphCanvasPanel {
+    /// Compile and build one pin's preview on a worker (PSGC compile, WGSL
+    /// validation and GPU pipeline creation are all slow). The result is
+    /// installed when it arrives, unless a newer edit superseded it.
+    fn start_pin_preview_build(
+        &mut self,
+        request: &PinPreviewRequest,
+        graph_signature: u64,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cx: &mut Context<Self>,
+    ) {
+        let graph = self.graph.clone();
+        let (node_id, pin_id) = (request.node_id.clone(), request.pin_id.clone());
+        let key = request.cache_key.clone();
+        let (device, queue) = (device.clone(), queue.clone());
+
+        let task = cx.spawn({
+            let key = key.clone();
+            async move |this, cx| {
+                let built = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let wgsl = crate::editor::panel::ShaderEditorPanel::compile_preview_wgsl_for_pin(
+                            &graph, &node_id, &pin_id,
+                        )
+                        .ok()?;
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        wgsl.hash(&mut hasher);
+                        let shader_hash = hasher.finish();
+                        let (texture, view) = ensure_preview_texture(&device);
+                        let renderer = catch_unwind(AssertUnwindSafe(|| {
+                            PinPreviewRenderer::new(&device, &queue, &wgsl)
+                        }))
+                        .ok()?;
+                        Some(PinPreviewCacheEntry {
+                            graph_signature,
+                            shader_hash,
+                            renderer,
+                            texture,
+                            view,
+                        })
+                    })
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    // A newer edit replaced this build: its result is stale.
+                    let current = this
+                        .pin_preview_pending
+                        .get(&key)
+                        .map(|pending| pending.graph_signature);
+                    if current != Some(graph_signature) {
+                        return;
+                    }
+                    match built {
+                        Some(entry) => {
+                            this.pin_preview_cache.insert(key.clone(), entry);
+                        }
+                        // The graph does not compile into a preview (yet):
+                        // show none rather than a stale image.
+                        None => {
+                            this.pin_preview_cache.remove(&key);
+                        }
+                    }
+                    cx.notify();
+                });
+            }
+        });
+        // Replacing an older pending build drops (cancels) it.
+        self.pin_preview_pending.insert(
+            request.cache_key.clone(),
+            PendingPinPreview {
+                graph_signature,
+                _task: task,
+            },
+        );
+    }
+
     fn build_texture_previews(
         &mut self,
         requests: &[PinPreviewRequest],
@@ -500,51 +576,28 @@ impl GraphCanvasPanel {
         self.pin_preview_cache
             .retain(|key, _| request_keys.contains(key.as_str()));
 
+        self.pin_preview_pending
+            .retain(|key, _| request_keys.contains(key.as_str()));
+
         let mut previews = Vec::with_capacity(requests.len());
-        let editor = self.panel.upgrade();
 
         for request in requests {
-            let Some(editor) = editor.as_ref() else {
-                continue;
-            };
-
-            let rebuild = match self.pin_preview_cache.get(&request.cache_key) {
-                Some(entry) => entry.graph_signature != graph_signature,
-                None => true,
-            };
-
-            if rebuild {
-                let Ok(wgsl) = editor.read(cx).compile_preview_wgsl_for_pin(
-                    &self.graph,
-                    &request.node_id,
-                    &request.pin_id,
-                ) else {
-                    self.pin_preview_cache.remove(&request.cache_key);
-                    continue;
-                };
-
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                wgsl.hash(&mut hasher);
-                let shader_hash = hasher.finish();
-                let (texture, view) = ensure_preview_texture(device);
-                let Ok(renderer) = catch_unwind(AssertUnwindSafe(|| {
-                    PinPreviewRenderer::new(device, queue, &wgsl)
-                })) else {
-                    self.pin_preview_cache.remove(&request.cache_key);
-                    continue;
-                };
-                self.pin_preview_cache.insert(
-                    request.cache_key.clone(),
-                    PinPreviewCacheEntry {
-                        graph_signature,
-                        shader_hash,
-                        renderer,
-                        texture,
-                        view,
-                    },
-                );
+            let stale = self
+                .pin_preview_cache
+                .get(&request.cache_key)
+                .map_or(true, |entry| entry.graph_signature != graph_signature);
+            // A build for this exact graph state is running, or already
+            // failed: do not start another one every frame.
+            let attempted = self
+                .pin_preview_pending
+                .get(&request.cache_key)
+                .is_some_and(|pending| pending.graph_signature == graph_signature);
+            if stale && !attempted {
+                self.start_pin_preview_build(request, graph_signature, device, queue, cx);
             }
 
+            // Keep drawing the previous image while the new one builds, so
+            // an edit never blanks or stalls the canvas.
             if let Some(entry) = self.pin_preview_cache.get_mut(&request.cache_key) {
                 entry.renderer.render(device, queue, &entry.view, time);
                 previews.push(TexturePreview {

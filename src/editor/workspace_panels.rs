@@ -244,7 +244,7 @@ impl Render for PreviewPanel {
             let wgsl = editor.read(cx).last_compiled_wgsl.clone();
             if let Some(wgsl) = wgsl {
                 self.preview.update(cx, |preview, _cx| {
-                    preview.update_shader(&wgsl);
+                    preview.update_shader(&wgsl, _cx);
                 });
             }
         }
@@ -274,6 +274,14 @@ impl Panel for PreviewPanel {
 /// per-tab undo history, the GPU surface/renderer, and every piece of
 /// interaction state. The `panel` weak-ref is read-only access to shared data
 /// (library_manager) on the shell editor.
+/// A pin preview being built on a worker for one graph state. Kept after the
+/// build finishes (or fails) so the same state is not rebuilt every frame;
+/// replaced when the graph changes, which cancels the superseded build.
+pub struct PendingPinPreview {
+    pub graph_signature: u64,
+    pub _task: Task<()>,
+}
+
 pub struct PinPreviewCacheEntry {
     pub graph_signature: u64,
     pub shader_hash: u64,
@@ -301,6 +309,8 @@ pub struct GraphCanvasPanel {
     pub renderer: crate::rendering::gpu::BpRenderer,
     pub surface: Option<gpui::WgpuSurfaceHandle>,
     pub pin_preview_cache: HashMap<String, PinPreviewCacheEntry>,
+    /// Pin previews being built on a worker, by cache key.
+    pub pin_preview_pending: HashMap<String, PendingPinPreview>,
     pub canvas_origin: Rc<RefCell<Point<f32>>>,
     pub element_bounds: Option<Bounds<Pixels>>,
     pub graph_anim_start: std::time::Instant,
@@ -436,6 +446,7 @@ impl GraphCanvasPanel {
             renderer: crate::rendering::gpu::BpRenderer::new(),
             surface: None,
             pin_preview_cache: HashMap::new(),
+            pin_preview_pending: HashMap::new(),
             canvas_origin: Rc::new(RefCell::new(Point::new(0.0, 0.0))),
             element_bounds: None,
             graph_anim_start: std::time::Instant::now(),

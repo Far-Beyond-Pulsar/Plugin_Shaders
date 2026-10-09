@@ -21,6 +21,9 @@ pub struct MaterialPreviewPanel {
     surface_handle: Option<gpui::WgpuSurfaceHandle>,
     needs_rebuild: bool,
     last_shader_source: Option<String>,
+    /// The in-flight background shader build. Replacing it drops (cancels)
+    /// a superseded one, so rapid edits only ever apply the newest shader.
+    shader_build: Option<Task<()>>,
     compile_requested: bool,
     /// Right mouse button is held over the viewport — drag orbits the
     /// camera, and scroll zooms in/out while this is true.
@@ -50,6 +53,7 @@ impl MaterialPreviewPanel {
             surface_handle: None,
             needs_rebuild: true,
             last_shader_source: None,
+            shader_build: None,
             compile_requested: false,
             orbiting: false,
             last_drag_pos: None,
@@ -206,12 +210,31 @@ impl MaterialPreviewPanel {
         self.needs_rebuild = true;
     }
 
-    pub fn update_shader(&mut self, wgsl_source: &str) {
+    /// Compile `wgsl_source` into the preview pipeline without blocking the
+    /// editor: shader compilation and texture decoding run on a worker, and
+    /// the finished pipeline is swapped in while the previous one keeps
+    /// drawing. A shader the GPU rejects leaves the old pipeline in place.
+    pub fn update_shader(&mut self, wgsl_source: &str, cx: &mut Context<Self>) {
         if self.last_shader_source.as_deref() == Some(wgsl_source) {
             return;
         }
+        // Not initialized yet: leave `last_shader_source` unset so the next
+        // frame retries instead of dropping this shader.
+        let Some(inputs) = self.renderer.shader_build_inputs() else {
+            return;
+        };
         self.last_shader_source = Some(wgsl_source.to_string());
-        self.renderer.update_shader(wgsl_source);
+        let source = wgsl_source.to_string();
+        self.shader_build = Some(cx.spawn(async move |this, cx| {
+            let build = cx
+                .background_executor()
+                .spawn(async move { super::renderer::build_shader(&inputs, &source) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.renderer.apply_shader(build);
+                cx.notify();
+            });
+        }));
     }
 
     fn render_surface(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
@@ -251,7 +274,7 @@ impl MaterialPreviewPanel {
 
         if let Some(ref wgsl) = wgsl_to_compile {
             if self.renderer.device.is_some() && self.renderer.queue.is_some() {
-                self.update_shader(wgsl);
+                self.update_shader(wgsl, cx);
             }
         }
 

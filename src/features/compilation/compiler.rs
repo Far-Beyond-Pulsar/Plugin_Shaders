@@ -33,13 +33,24 @@ impl ShaderEditorPanel {
 
     /// Compile to WGSL via PSGC
     pub fn compile_to_wgsl(&self) -> Result<String, String> {
-        let main_tab = self
-            .open_tabs
+        Self::compile_blueprint(self.main_graph_snapshot()?)
+    }
+
+    /// A copy of the main tab's graph, taken on the UI thread so the compile
+    /// itself can run elsewhere without touching editor state.
+    fn main_graph_snapshot(&self) -> Result<crate::BlueprintGraph, String> {
+        self.open_tabs
             .iter()
             .find(|tab| tab.is_main)
             .or_else(|| self.open_tabs.first())
-            .ok_or_else(|| "No shader graph is open".to_string())?;
-        let wgsl = self.compile_graph_to_wgsl(&main_tab.graph)?;
+            .map(|tab| tab.graph.clone())
+            .ok_or_else(|| "No shader graph is open".to_string())
+    }
+
+    /// PSGC compile plus WGSL validation. Pure CPU work on owned data: run
+    /// it on a worker, never inside a UI update.
+    fn compile_blueprint(graph: crate::BlueprintGraph) -> Result<String, String> {
+        let wgsl = Self::compile_graph_to_wgsl(&graph)?;
         validate_wgsl(&wgsl)?;
         Ok(wgsl)
     }
@@ -112,12 +123,22 @@ impl ShaderEditorPanel {
             );
 
             panel.sync_all_canvases_to_tabs(cx);
-            panel.compile_to_wgsl()
+            panel.main_graph_snapshot()
         });
+
+        // The compile itself runs on the background executor; the editor
+        // keeps handling input while it works.
+        let result = match result {
+            Ok(Ok(graph)) => Ok(cx
+                .background_executor()
+                .spawn(async move { Self::compile_blueprint(graph) })
+                .await),
+            Ok(Err(error)) => Ok(Err(error)),
+            Err(error) => Err(error),
+        };
 
         match result {
             Ok(Ok(wgsl_code)) => {
-                smol::Timer::after(std::time::Duration::from_millis(500)).await;
                 let _ = panel_entity.update(cx, |panel, cx| {
                     let elapsed_ms = started_at.elapsed().as_millis();
 

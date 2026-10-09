@@ -38,26 +38,25 @@ impl ShaderEditorPanel {
         &self,
         graph: &crate::core::graph::BlueprintGraph,
     ) -> Result<GraphDescription, String> {
-        self.convert_graph_to_description(graph)
+        Self::convert_graph_to_description(graph)
     }
 
     /// Compile a graph after lowering reflected texture asset references into
     /// concrete WGSL texture bindings. The asset path stays on the graph pin;
     /// the generated WGSL binds that pin to a stable per-graph resource name.
-    pub(crate) fn compile_graph_to_wgsl(
-        &self,
-        blueprint: &BlueprintGraph,
-    ) -> Result<String, String> {
-        let mut graph = self.convert_graph_to_description(blueprint)?;
+    ///
+    /// Needs no editor state, so it can run on a worker thread.
+    pub(crate) fn compile_graph_to_wgsl(blueprint: &BlueprintGraph) -> Result<String, String> {
+        let mut graph = Self::convert_graph_to_description(blueprint)?;
         let bindings = lower_texture_sources(&mut graph, blueprint)?;
         let source = psgc::compile_shader(&graph)
             .map_err(|error| format!("WGSL compilation failed: {error}"))?;
         Ok(format!("{bindings}{source}"))
     }
 
-    /// Convert any blueprint graph to psgc GraphDescription
+    /// Convert any blueprint graph to psgc GraphDescription. Needs no editor
+    /// state, so it can run on a worker thread.
     pub(crate) fn convert_graph_to_description(
-        &self,
         graph: &BlueprintGraph,
     ) -> Result<GraphDescription, String> {
         let mut graph_desc = GraphDescription::new("Shader Graph");
@@ -404,8 +403,8 @@ impl ShaderEditorPanel {
         })
     }
 
+    /// Needs no editor state, so it can run on a worker thread.
     pub(crate) fn compile_preview_wgsl_for_pin(
-        &self,
         graph: &BlueprintGraph,
         node_id: &str,
         pin_id: &str,
@@ -428,7 +427,7 @@ impl ShaderEditorPanel {
             ));
         }
 
-        let mut graph_desc = self.convert_graph_to_description(graph)?;
+        let mut graph_desc = Self::convert_graph_to_description(graph)?;
         let texture_bindings = lower_texture_sources(&mut graph_desc, graph)?;
         graph_desc.nodes.retain(|_, node| {
             node.node_type != "fragment_output" && node.node_type != "vertex_output"
