@@ -75,7 +75,7 @@ gpui-ce = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "b
 ui = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "bbe5ecd3f10746c7ba580a113c06b8e4b6e5d0e2" }
 ui-macros = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = "bbe5ecd3f10746c7ba580a113c06b8e4b6e5d0e2" }
 
-# Helio's internal SceneDB pin predates the World subscription rework; unify
-# on one copy so `World`/`ComponentId`/`Pod` types keep a single identity.
+# Match the workspace SceneDB revision so `World`/`ComponentId`/`Pod` types
+# keep a single identity across the engine and Helio.
 [patch."https://github.com/Far-Beyond-Pulsar/SceneDB"]
-pulsar_scenedb = { git = "https://github.com/Far-Beyond-Pulsar//SceneDB", rev = "c761890789b3e3c16b362a91769570bd587e5ac6" }
+pulsar_scenedb = { git = "https://github.com/Far-Beyond-Pulsar//SceneDB", rev = "685b1b0aa212b64912549efd583c93480bea027f" }
