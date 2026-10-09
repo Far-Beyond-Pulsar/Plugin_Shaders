@@ -1691,6 +1691,7 @@ dependencies = [
  "pulsar_reflection 0.1.0",
  "serde",
  "serde_json",
+ "smol",
  "tokio",
  "tool_registry",
  "tool_registry_macros",
@@ -5016,6 +5017,7 @@ dependencies = [
  "pulsar_events",
  "pulsar_reflection 0.1.0",
  "pulsar_script_vm",
+ "pulsar_world_registry",
  "schemars",
  "serde",
  "serde_json",
@@ -5501,6 +5503,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "uuid",
  "wgpu",
 ]
 
@@ -5578,7 +5581,9 @@ dependencies = [
  "pulsar_scenedb",
  "pulsar_script_math",
  "pulsar_script_vm",
+ "serde",
  "serde_json",
+ "serde_path_to_error",
  "thiserror 2.0.20",
  "tracing",
 ]
@@ -6658,6 +6663,17 @@ dependencies = [
  "memchr",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serde_path_to_error"
+version = "0.1.20"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10a9ff822e371bb5403e391ecd83e182e0e77ba7f6fe0160b795797109d1b457"
+dependencies = [
+ "itoa",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]

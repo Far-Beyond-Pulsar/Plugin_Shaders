@@ -102,7 +102,7 @@ pub fn render_graph_controls(
                         )
                         .child(
                             Button::new("close_graph_controls")
-                                .icon(IconName::X)
+                                .icon(IconName::Close)
                                 .ghost()
                                 .xsmall()
                                 .on_click(cx.listener(|panel, _, _, cx| {
