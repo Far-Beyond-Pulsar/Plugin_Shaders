@@ -284,7 +284,9 @@ fn pin_row_center_offset(node: &BlueprintNode, row: usize) -> f32 {
 
 fn pin_preview_rect(node: &BlueprintNode, row: usize) -> Option<([f32; 2], [f32; 2])> {
     let pin = node.outputs.get(row)?;
-    if !pin.data_type.is_texture_previewable() {
+    // Off unless the debug toggle is on: no preview rect means no request,
+    // so nothing compiles and the canvas is not kept redrawing for it.
+    if !layout::pin_supports_texture_preview(pin) {
         return None;
     }
 

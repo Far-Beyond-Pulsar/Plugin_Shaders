@@ -179,6 +179,35 @@ impl ToolbarRenderer {
                     .gap_1p5()
                     .items_center()
                     .child({
+                        // Debugging aid, off by default: live per-pin texture
+                        // previews. Each compiles its own shader and renders
+                        // every frame, so shaders only compile when the user
+                        // presses Compile unless this is switched on.
+                        let btn = Button::new("toolbar-debug-previews")
+                            .icon(IconName::Bug)
+                            .tooltip("Debug: live pin texture previews (compiles on every edit)")
+                            .on_click(cx.listener(|panel, _, _, cx| {
+                                let enabled = !crate::rendering::layout::texture_previews_enabled();
+                                crate::rendering::layout::set_texture_previews_enabled(enabled);
+                                // Node sizes follow the setting.
+                                for tab in &mut panel.open_tabs {
+                                    crate::rendering::layout::relayout_graph(&mut tab.graph);
+                                }
+                                for (_, canvas) in &panel.graph_panels {
+                                    canvas.update(cx, |canvas, cx| {
+                                        crate::rendering::layout::relayout_graph(&mut canvas.graph);
+                                        cx.notify();
+                                    });
+                                }
+                                cx.notify();
+                            }));
+                        if crate::rendering::layout::texture_previews_enabled() {
+                            btn.primary()
+                        } else {
+                            btn
+                        }
+                    })
+                    .child({
                         let btn = Button::new("toolbar-minimap")
                             .icon(IconName::Map)
                             .tooltip("Toggle Minimap")

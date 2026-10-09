@@ -20,8 +20,43 @@ pub const GRID_SNAP: f32 = 10.0;
 
 pub const NODE_BASE_H: f32 = HEADER_H + SEP_H + BODY_PAD * 2.0;
 
+/// Live texture previews on node pins are a debugging aid, off by default.
+/// Each one compiles its own shader and renders every frame, so the editor
+/// only pays for them when they are explicitly switched on (the toolbar's
+/// debug toggle). Everything that depends on previews, node width and row
+/// height, label placement, the preview requests themselves and the
+/// continuous redraw they cause, goes through
+/// [`pin_supports_texture_preview`], so this one flag controls all of it.
+static TEXTURE_PREVIEWS_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn texture_previews_enabled() -> bool {
+    TEXTURE_PREVIEWS_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Switch pin texture previews on or off. Node sizes depend on this, so
+/// callers follow it with [`relayout_graph`] for every open graph.
+pub fn set_texture_previews_enabled(enabled: bool) {
+    TEXTURE_PREVIEWS_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether `pin` shows a live texture preview right now.
 pub fn pin_supports_texture_preview(pin: &Pin) -> bool {
-    pin.data_type.is_texture_previewable()
+    texture_previews_enabled() && pin.data_type.is_texture_previewable()
+}
+
+/// Recompute every node's size from its pins, after the preview setting
+/// changed. Reroute nodes keep their fixed size.
+pub fn relayout_graph(graph: &mut crate::BlueprintGraph) {
+    for node in &mut graph.nodes {
+        if node.node_type == crate::NodeType::Reroute {
+            continue;
+        }
+        node.size = crate::Size::new(
+            node_width_for_pins(&node.outputs),
+            node_height_for_pins(&node.inputs, &node.outputs),
+        );
+    }
 }
 
 pub fn node_has_texture_preview(outputs: &[Pin]) -> bool {
@@ -86,4 +121,42 @@ pub fn node_height_for_pin_rows(pin_rows: usize) -> f32 {
 /// Round `value` up to the nearest multiple of `GRID_SNAP`.
 pub fn snap_to_grid(value: f32) -> f32 {
     (value / GRID_SNAP).ceil() * GRID_SNAP
+}
+
+#[cfg(test)]
+mod preview_toggle_tests {
+    use super::*;
+    use crate::core::types::{PinDataType, PinType};
+
+    fn color_pin() -> Pin {
+        Pin {
+            id: "result".into(),
+            name: "result".into(),
+            pin_type: PinType::Output,
+            data_type: PinDataType::from_type_str("vec4<f32>"),
+        }
+    }
+
+    /// Previews are a debugging aid: by default a colour pin is an ordinary
+    /// pin row on an ordinary-width node, so nothing is reserved, compiled or
+    /// redrawn for it. Switching them on widens the node and grows the row;
+    /// switching off restores the compact layout.
+    #[test]
+    fn previews_are_off_by_default_and_the_toggle_drives_the_layout() {
+        let outputs = [color_pin()];
+        assert!(!texture_previews_enabled(), "off unless explicitly enabled");
+        assert!(!pin_supports_texture_preview(&outputs[0]));
+        assert_eq!(node_width_for_pins(&outputs), NODE_BASE_W);
+        assert_eq!(pin_row_height(None, Some(&outputs[0])), PIN_ROW_H);
+
+        set_texture_previews_enabled(true);
+        let (width, row) = (
+            node_width_for_pins(&outputs),
+            pin_row_height(None, Some(&outputs[0])),
+        );
+        set_texture_previews_enabled(false);
+        assert_eq!(width, NODE_PREVIEW_W);
+        assert_eq!(row, TEXTURE_PREVIEW_SIZE);
+        assert_eq!(node_width_for_pins(&outputs), NODE_BASE_W);
+    }
 }

@@ -24,7 +24,6 @@ pub struct MaterialPreviewPanel {
     /// The in-flight background shader build. Replacing it drops (cancels)
     /// a superseded one, so rapid edits only ever apply the newest shader.
     shader_build: Option<Task<()>>,
-    compile_requested: bool,
     /// Right mouse button is held over the viewport — drag orbits the
     /// camera, and scroll zooms in/out while this is true.
     orbiting: bool,
@@ -54,7 +53,6 @@ impl MaterialPreviewPanel {
             needs_rebuild: true,
             last_shader_source: None,
             shader_build: None,
-            compile_requested: false,
             orbiting: false,
             last_drag_pos: None,
             subscriptions: Vec::new(),
@@ -263,15 +261,8 @@ impl MaterialPreviewPanel {
             .upgrade()
             .and_then(|editor| editor.read(cx).last_compiled_wgsl.clone());
 
-        // Trigger an initial compile so the preview has a shader pipeline
-        // without requiring the user to press "Compile" first.
-        if wgsl_to_compile.is_none() && !self.compile_requested {
-            self.compile_requested = true;
-            if let Some(editor) = self.editor.upgrade() {
-                editor.update(cx, |panel, cx| panel.start_compilation(cx));
-            }
-        }
-
+        // Nothing compiles until the user presses Compile (F7): opening or
+        // editing a graph must never start shader compilation on its own.
         if let Some(ref wgsl) = wgsl_to_compile {
             if self.renderer.device.is_some() && self.renderer.queue.is_some() {
                 self.update_shader(wgsl, cx);
@@ -321,6 +312,24 @@ impl MaterialPreviewPanel {
             div().size_full().bg(gpui::rgb(0x1a1a1a)).into_any_element()
         };
 
+        // Shaders only compile when the user presses Compile, so say so
+        // instead of showing an unexplained empty viewport.
+        let no_shader_hint = self
+            .editor
+            .upgrade()
+            .is_some_and(|editor| editor.read(cx).last_compiled_wgsl.is_none())
+            .then(|| {
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_sm()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Press Compile (F7) to preview this material")
+            });
+
         div()
             .size_full()
             .min_h(px(200.))
@@ -334,6 +343,7 @@ impl MaterialPreviewPanel {
             .on_scroll_wheel(Self::on_orbit_scroll(cx))
             .relative()
             .child(gpu_display)
+            .children(no_shader_hint)
             .child(
                 plugin_editor_api::surface_animation::surface_animation(
                     &cx.entity(),
