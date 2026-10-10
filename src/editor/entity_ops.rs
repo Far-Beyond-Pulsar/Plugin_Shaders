@@ -221,9 +221,9 @@ impl GraphCanvasPanel {
         }
 
         // Update comment containment after drag
-        for comment in self.graph.comments.iter_mut() {
-            let nodes = self.graph.nodes.clone();
-            comment.update_contained_nodes(&nodes);
+        let graph = &mut *self.graph;
+        for comment in graph.comments.iter_mut() {
+            comment.update_contained_nodes(&graph.nodes);
         }
 
         // Clear drag state

@@ -65,6 +65,22 @@ impl ShaderEditorPanel {
                 .map(|_| size(px(0.0), px(56.0)))
                 .collect::<Vec<_>>(),
         );
+        // Current preview build failures (title, message): listed until the
+        // material/pin builds again successfully or the pin goes away.
+        let mut preview_errors: Vec<(String, String)> = Vec::new();
+        if let Some(message) = &self.material_preview_error {
+            preview_errors.push(("Material preview".to_string(), message.clone()));
+        }
+        for (_, canvas) in &self.graph_panels {
+            let mut pin_errors: Vec<_> = canvas.read(cx).pin_preview_errors.iter().collect();
+            pin_errors.sort_by(|a, b| a.0.cmp(b.0));
+            preview_errors.extend(pin_errors.into_iter().map(|(_, error)| {
+                (
+                    format!("Pin preview: {}", error.label),
+                    error.message.clone(),
+                )
+            }));
+        }
         let compiler_entity = cx.entity().clone();
         let scroll_handle = self.compiler_output_scroll_handle.clone();
         let scrollbar_state = self.compiler_output_scrollbar_state.clone();
@@ -106,6 +122,39 @@ impl ShaderEditorPanel {
                             .child(format!("{} entries", self.compilation_history.len())),
                     ),
             )
+            .when(!preview_errors.is_empty(), |this| {
+                this.child(
+                    v_flex()
+                        .id("compiler-preview-errors")
+                        .w_full()
+                        .max_h(px(160.0))
+                        .overflow_y_scroll()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .children(preview_errors.into_iter().map(|(title, message)| {
+                            v_flex()
+                                .w_full()
+                                .px_2()
+                                .py_1()
+                                .gap_0p5()
+                                .border_l_2()
+                                .border_color(cx.theme().danger)
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(cx.theme().danger)
+                                        .child(format!("✗ {title}")),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(message),
+                                )
+                        })),
+                )
+            })
             .child(
                 div()
                     .flex_1()

@@ -113,6 +113,9 @@ pub struct ShaderEditorPanel {
     // Compilation
     pub compilation_status: CompilationStatus,
     pub compilation_history: Vec<CompilationHistoryEntry>,
+    /// Why the material preview's last shader build failed, if it did.
+    /// Shown in the Compiler Output panel until a build succeeds.
+    pub material_preview_error: Option<String>,
     pub compiler_output_scroll_handle: VirtualListScrollHandle,
     pub compiler_output_scrollbar_state: ScrollbarState,
     pub find_output_scroll_handle: VirtualListScrollHandle,
@@ -481,6 +484,7 @@ impl ShaderEditorPanel {
             subscriptions: Vec::new(),
             compilation_status: CompilationStatus::default(),
             compilation_history: Vec::new(),
+            material_preview_error: None,
             compiler_output_scroll_handle: VirtualListScrollHandle::new(),
             compiler_output_scrollbar_state: ScrollbarState::default(),
             find_output_scroll_handle: VirtualListScrollHandle::new(),
@@ -899,8 +903,9 @@ impl ShaderEditorPanel {
             })
             .collect();
 
-        for (tab_id, live_graph) in &snapshots {
-            if let Some(tab) = self.open_tabs.iter_mut().find(|t| t.id == *tab_id) {
+        // Move each snapshot into its tab: one graph copy per canvas.
+        for (tab_id, live_graph) in snapshots {
+            if let Some(tab) = self.open_tabs.iter_mut().find(|t| t.id == tab_id) {
                 tracing::info!(
                     ">>> sync_all_canvases_to_tabs: writing to tab={} nodes={} connections={} (was nodes={})",
                     tab_id,
@@ -908,7 +913,7 @@ impl ShaderEditorPanel {
                     live_graph.connections.len(),
                     tab.graph.nodes.len(),
                 );
-                tab.graph = live_graph.clone();
+                tab.graph = live_graph;
             } else {
                 tracing::warn!(
                     ">>> sync_all_canvases_to_tabs: no matching tab for canvas tab_id={}",
