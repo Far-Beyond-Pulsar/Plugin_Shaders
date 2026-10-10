@@ -7,7 +7,7 @@ use gpui::*;
 // ── ShaderEditorPanel helpers ──────────────────────────────────────────────
 
 impl ShaderEditorPanel {
-    fn push_compilation_history(
+    pub(crate) fn push_compilation_history(
         &mut self,
         state: CompilationState,
         stage: impl Into<String>,
@@ -29,6 +29,29 @@ impl ShaderEditorPanel {
             let overflow = self.compilation_history.len() - MAX_HISTORY_ENTRIES;
             self.compilation_history.drain(0..overflow);
         }
+    }
+
+    /// Record the material preview's latest shader build for the Compiler
+    /// Output panel: an error is listed (and added to the history once per
+    /// distinct message) until a build succeeds and clears it.
+    pub(crate) fn set_material_preview_error(
+        &mut self,
+        error: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.material_preview_error == error {
+            return;
+        }
+        if let Some(message) = &error {
+            self.push_compilation_history(
+                CompilationState::Error,
+                "preview",
+                "Material preview failed",
+                Some(message.clone()),
+            );
+        }
+        self.material_preview_error = error;
+        cx.notify();
     }
 
     /// Compile to WGSL via PSGC

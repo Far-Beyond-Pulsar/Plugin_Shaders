@@ -14,6 +14,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::Arc;
 
 use crate::core::types::PinDataType as DataType;
 use gpui::prelude::*;
@@ -21,9 +22,11 @@ use gpui::*;
 use ui::ActiveTheme;
 use ui::PixelsExt;
 
-use crate::core::graph::BlueprintGraph;
+use crate::core::graph::{BlueprintGraph, Tracked};
 use crate::core::types::{BlueprintComment, BlueprintNode, Connection, NodeType};
-use crate::editor::workspace_panels::{GraphCanvasPanel, PendingPinPreview, PinPreviewCacheEntry};
+use crate::editor::workspace_panels::{
+    GraphCanvasPanel, PendingPinPreview, PinPreviewCacheEntry, PinPreviewError,
+};
 use crate::rendering::gpu::{
     GraphUniforms, NodeInstance, PinInstance, PinPreviewRenderer, TexturePreview,
     TexturePreviewInstance, WireInstance, WireVertex,
@@ -342,6 +345,23 @@ fn graph_preview_signature(graph: &BlueprintGraph) -> u64 {
     hasher.finish()
 }
 
+/// [`graph_preview_signature`], rehashed only when `graph`'s revision moved
+/// past the one `cache` was computed for.
+fn cached_preview_signature(
+    cache: &mut Option<(u64, u64)>,
+    graph: &Tracked<BlueprintGraph>,
+) -> u64 {
+    let revision = graph.revision();
+    match *cache {
+        Some((seen, signature)) if seen == revision => signature,
+        _ => {
+            let signature = graph_preview_signature(graph);
+            *cache = Some((revision, signature));
+            signature
+        }
+    }
+}
+
 fn bezier(p0: (f32, f32), p1: (f32, f32), p2: (f32, f32), p3: (f32, f32), t: f32) -> (f32, f32) {
     let u = 1.0 - t;
     let a = u * u * u;
@@ -485,7 +505,120 @@ fn ensure_preview_texture(device: &wgpu::Device) -> (wgpu::Texture, wgpu::Textur
     (texture, view)
 }
 
+/// Quiet period after the last graph edit before pin previews rebuild, so
+/// dragging a slider-style property rebuilds once it settles instead of on
+/// every frame of the drag.
+const PIN_PREVIEW_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(120);
+
+/// Coalesces rapid graph edits into one pin preview rebuild (a trailing-edge
+/// debounce). Pure state: the canvas feeds it the preview signature on every
+/// surface frame, and those keep ticking while previews are shown, so the
+/// final state is always built once edits stop.
+#[derive(Default)]
+pub struct PreviewDebounce {
+    signature: Option<u64>,
+    changed_at: Option<std::time::Instant>,
+}
+
+impl PreviewDebounce {
+    /// Observe the graph's preview `signature` at `now`. True once it has
+    /// not changed for `delay`; the first state seen builds at once, since
+    /// there are no edits to coalesce.
+    pub fn settled(
+        &mut self,
+        signature: u64,
+        now: std::time::Instant,
+        delay: std::time::Duration,
+    ) -> bool {
+        match self.signature {
+            Some(seen) if seen == signature => {}
+            Some(_) => {
+                self.signature = Some(signature);
+                self.changed_at = Some(now);
+            }
+            None => self.signature = Some(signature),
+        }
+        self.changed_at
+            .map_or(true, |at| now.saturating_duration_since(at) >= delay)
+    }
+}
+
 impl GraphCanvasPanel {
+    /// The graph's preview signature, rehashed only when the graph may have
+    /// changed since the last call.
+    fn current_preview_signature(&mut self) -> u64 {
+        cached_preview_signature(&mut self.pin_preview_signature, &self.graph)
+    }
+
+    /// One shared copy of the graph for every pin build of this state.
+    fn preview_graph_snapshot(&mut self, graph_signature: u64) -> Arc<BlueprintGraph> {
+        if let Some((signature, graph)) = &self.pin_preview_snapshot {
+            if *signature == graph_signature {
+                return graph.clone();
+            }
+        }
+        let graph = Arc::new((*self.graph).clone());
+        self.pin_preview_snapshot = Some((graph_signature, graph.clone()));
+        graph
+    }
+
+    /// `Noise.result`-style name for a pin, for the Compiler Output panel.
+    fn pin_preview_label(&self, node_id: &str, pin_id: &str) -> String {
+        let node = self.graph.nodes.iter().find(|node| node.id == node_id);
+        let node_name = node.map_or(node_id, |node| node.title.as_str());
+        let pin_name = node
+            .and_then(|node| node.outputs.iter().find(|pin| pin.id == pin_id))
+            .map_or(pin_id, |pin| pin.name.as_str());
+        if self.is_main {
+            format!("{node_name}.{pin_name}")
+        } else {
+            format!("{} / {node_name}.{pin_name}", self.name)
+        }
+    }
+
+    /// Record a finished pin build for the Compiler Output panel: a failure
+    /// is listed (and logged to the history once per distinct message), a
+    /// success clears that pin's stale error.
+    fn record_pin_preview_result(
+        &mut self,
+        key: &str,
+        node_id: &str,
+        pin_id: &str,
+        result: Result<(), String>,
+        cx: &mut Context<Self>,
+    ) {
+        let message = match result {
+            Ok(()) => {
+                self.pin_preview_errors.remove(key);
+                return;
+            }
+            Err(message) => message,
+        };
+        if self
+            .pin_preview_errors
+            .get(key)
+            .is_some_and(|error| error.message == message)
+        {
+            return;
+        }
+        let label = self.pin_preview_label(node_id, pin_id);
+        tracing::warn!("Pin preview {label} failed: {message}");
+        if let Some(panel) = self.panel.upgrade() {
+            let (label, message) = (label.clone(), message.clone());
+            panel.update(cx, |panel, cx| {
+                panel.push_compilation_history(
+                    crate::CompilationState::Error,
+                    "preview",
+                    format!("Pin preview failed: {label}"),
+                    Some(message),
+                );
+                cx.notify();
+            });
+        }
+        self.pin_preview_errors
+            .insert(key.to_string(), PinPreviewError { label, message });
+    }
+
     /// Compile and build one pin's preview on a worker (PSGC compile, WGSL
     /// validation and GPU pipeline creation are all slow). The result is
     /// installed when it arrives, unless a newer edit superseded it.
@@ -497,7 +630,7 @@ impl GraphCanvasPanel {
         queue: &wgpu::Queue,
         cx: &mut Context<Self>,
     ) {
-        let graph = self.graph.clone();
+        let graph = self.preview_graph_snapshot(graph_signature);
         let (node_id, pin_id) = (request.node_id.clone(), request.pin_id.clone());
         let key = request.cache_key.clone();
         let (device, queue) = (device.clone(), queue.clone());
@@ -507,26 +640,30 @@ impl GraphCanvasPanel {
             async move |this, cx| {
                 let built = cx
                     .background_executor()
-                    .spawn(async move {
-                        let wgsl = crate::editor::panel::ShaderEditorPanel::compile_preview_wgsl_for_pin(
-                            &graph, &node_id, &pin_id,
-                        )
-                        .ok()?;
-                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                        wgsl.hash(&mut hasher);
-                        let shader_hash = hasher.finish();
-                        let (texture, view) = ensure_preview_texture(&device);
-                        let renderer = catch_unwind(AssertUnwindSafe(|| {
-                            PinPreviewRenderer::new(&device, &queue, &wgsl)
-                        }))
-                        .ok()?;
-                        Some(PinPreviewCacheEntry {
-                            graph_signature,
-                            shader_hash,
-                            renderer,
-                            texture,
-                            view,
-                        })
+                    .spawn({
+                        let (node_id, pin_id) = (node_id.clone(), pin_id.clone());
+                        async move {
+                            let wgsl = crate::editor::panel::ShaderEditorPanel::compile_preview_wgsl_for_pin(
+                                &graph, &node_id, &pin_id,
+                            )?;
+                            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                            wgsl.hash(&mut hasher);
+                            let shader_hash = hasher.finish();
+                            let (texture, view) = ensure_preview_texture(&device);
+                            let renderer = catch_unwind(AssertUnwindSafe(|| {
+                                PinPreviewRenderer::new(&device, &queue, &wgsl)
+                            }))
+                            .map_err(|_| {
+                                "The GPU rejected the preview shader (see log)".to_string()
+                            })?;
+                            Ok::<_, String>(PinPreviewCacheEntry {
+                                graph_signature,
+                                shader_hash,
+                                renderer,
+                                texture,
+                                view,
+                            })
+                        }
                     })
                     .await;
                 let _ = this.update(cx, |this, cx| {
@@ -538,16 +675,19 @@ impl GraphCanvasPanel {
                     if current != Some(graph_signature) {
                         return;
                     }
-                    match built {
-                        Some(entry) => {
+                    let result = match built {
+                        Ok(entry) => {
                             this.pin_preview_cache.insert(key.clone(), entry);
+                            Ok(())
                         }
                         // The graph does not compile into a preview (yet):
                         // show none rather than a stale image.
-                        None => {
+                        Err(error) => {
                             this.pin_preview_cache.remove(&key);
+                            Err(error)
                         }
-                    }
+                    };
+                    this.record_pin_preview_result(&key, &node_id, &pin_id, result, cx);
                     cx.notify();
                 });
             }
@@ -570,7 +710,6 @@ impl GraphCanvasPanel {
         time: f32,
         cx: &mut Context<Self>,
     ) -> Vec<TexturePreview> {
-        let graph_signature = graph_preview_signature(&self.graph);
         let request_keys: HashSet<&str> = requests
             .iter()
             .map(|request| request.cache_key.as_str())
@@ -580,6 +719,32 @@ impl GraphCanvasPanel {
 
         self.pin_preview_pending
             .retain(|key, _| request_keys.contains(key.as_str()));
+
+        // A pin that is no longer previewed has no error to report.
+        let error_count = self.pin_preview_errors.len();
+        self.pin_preview_errors
+            .retain(|key, _| request_keys.contains(key.as_str()));
+        if self.pin_preview_errors.len() != error_count {
+            cx.notify();
+        }
+
+        if requests.is_empty() {
+            self.pin_preview_snapshot = None;
+            return Vec::new();
+        }
+
+        let graph_signature = self.current_preview_signature();
+        let settled = self.pin_preview_debounce.settled(
+            graph_signature,
+            std::time::Instant::now(),
+            PIN_PREVIEW_DEBOUNCE,
+        );
+        if !settled {
+            // Edits are still arriving: a build for an earlier state would be
+            // thrown away when it lands, so cancel it now.
+            self.pin_preview_pending
+                .retain(|_, pending| pending.graph_signature == graph_signature);
+        }
 
         let mut previews = Vec::with_capacity(requests.len());
 
@@ -594,7 +759,7 @@ impl GraphCanvasPanel {
                 .pin_preview_pending
                 .get(&request.cache_key)
                 .is_some_and(|pending| pending.graph_signature == graph_signature);
-            if stale && !attempted {
+            if settled && stale && !attempted {
                 self.start_pin_preview_build(request, graph_signature, device, queue, cx);
             }
 
@@ -1423,5 +1588,102 @@ impl NodeGraphRenderer {
             .mx(px(8.0))
             .h(px(1.0))
             .bg(cx.theme().border)
+    }
+}
+
+#[cfg(test)]
+mod pin_preview_tests {
+    // Not `super::*`: that brings in `gpui::test`, which shadows `#[test]`.
+    use super::{
+        cached_preview_signature, graph_preview_signature, PreviewDebounce, PIN_PREVIEW_DEBOUNCE,
+    };
+    use crate::core::graph::{BlueprintGraph, Tracked};
+    use crate::core::types::{BlueprintNode, NodeType};
+    use gpui::{Point, Size};
+    use std::time::{Duration, Instant};
+
+    fn graph_with_property(value: &str) -> Tracked<BlueprintGraph> {
+        let node = BlueprintNode {
+            id: "noise".into(),
+            definition_id: "noise".into(),
+            title: "Noise".into(),
+            icon: String::new(),
+            node_type: NodeType::Math,
+            position: Point::new(0.0, 0.0),
+            size: Size::new(100.0, 100.0),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            properties: [("scale".to_string(), value.to_string())].into(),
+            is_selected: false,
+            description: String::new(),
+            color: None,
+        };
+        Tracked::new(BlueprintGraph {
+            nodes: vec![node],
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn cached_signature_follows_edits() {
+        let mut graph = graph_with_property("1.0");
+        let mut cache = None;
+        let first = cached_preview_signature(&mut cache, &graph);
+        assert_eq!(first, graph_preview_signature(&graph));
+        assert_eq!(cache, Some((graph.revision(), first)));
+
+        graph.nodes[0]
+            .properties
+            .insert("scale".into(), "2.0".into());
+        let edited = cached_preview_signature(&mut cache, &graph);
+        assert_ne!(edited, first, "an edit must not reuse the cached signature");
+        assert_eq!(edited, graph_preview_signature(&graph));
+
+        // Panning borrows the graph mutably: rehashed, but still the same
+        // signature, so no preview rebuilds.
+        graph.pan_offset = Point::new(10.0, 0.0);
+        assert_eq!(cached_preview_signature(&mut cache, &graph), edited);
+    }
+
+    #[test]
+    fn debounce_builds_the_first_state_at_once() {
+        let mut debounce = PreviewDebounce::default();
+        assert!(debounce.settled(1, Instant::now(), PIN_PREVIEW_DEBOUNCE));
+    }
+
+    #[test]
+    fn debounce_coalesces_rapid_edits_into_the_final_state() {
+        let delay = Duration::from_millis(120);
+        let start = Instant::now();
+        let mut debounce = PreviewDebounce::default();
+        assert!(debounce.settled(0, start, delay));
+
+        // A slider drag: a new signature every 16 ms frame. None may build.
+        let mut now = start;
+        for signature in 1..=30u64 {
+            now += Duration::from_millis(16);
+            assert!(!debounce.settled(signature, now, delay));
+        }
+
+        // The drag stops on signature 30: still settling until the delay
+        // has passed since the last edit...
+        assert!(!debounce.settled(30, now + Duration::from_millis(119), delay));
+        // ...then the final state builds, and stays settled.
+        assert!(debounce.settled(30, now + delay, delay));
+        assert!(debounce.settled(30, now + delay * 5, delay));
+    }
+
+    #[test]
+    fn debounce_restarts_on_each_edit() {
+        let delay = Duration::from_millis(120);
+        let start = Instant::now();
+        let mut debounce = PreviewDebounce::default();
+        debounce.settled(0, start, delay);
+
+        assert!(!debounce.settled(1, start, delay));
+        assert!(!debounce.settled(2, start + Duration::from_millis(100), delay));
+        // 120 ms after the first edit but only 20 ms after the second.
+        assert!(!debounce.settled(2, start + Duration::from_millis(120), delay));
+        assert!(debounce.settled(2, start + Duration::from_millis(220), delay));
     }
 }

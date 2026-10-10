@@ -12,7 +12,7 @@ use ui::{
     ActiveTheme,
 };
 
-use crate::core::graph::BlueprintGraph;
+use crate::core::graph::{BlueprintGraph, Tracked};
 use crate::core::types::BlueprintNode;
 use crate::editor::panel::{ResizeHandle, ShaderEditorPanel};
 use crate::features::connections::operations::ConnectionDrag;
@@ -282,6 +282,13 @@ pub struct PendingPinPreview {
     pub _task: Task<()>,
 }
 
+/// A pin preview that failed to compile or build.
+pub struct PinPreviewError {
+    /// Human-readable pin name, e.g. `Noise.result`.
+    pub label: String,
+    pub message: String,
+}
+
 pub struct PinPreviewCacheEntry {
     pub graph_signature: u64,
     pub shader_hash: u64,
@@ -301,7 +308,9 @@ pub struct GraphCanvasPanel {
     /// Read-only reference to the shell editor for shared data + cross-tab events.
     pub panel: WeakEntity<ShaderEditorPanel>,
 
-    pub graph: BlueprintGraph,
+    /// Revision-tracked so per-frame caches (the pin preview signature) can
+    /// tell when the graph may have changed without rehashing it.
+    pub graph: Tracked<BlueprintGraph>,
     pub undo_manager: UndoManager,
     pub focus_handle: FocusHandle,
 
@@ -311,6 +320,17 @@ pub struct GraphCanvasPanel {
     pub pin_preview_cache: HashMap<String, PinPreviewCacheEntry>,
     /// Pin previews being built on a worker, by cache key.
     pub pin_preview_pending: HashMap<String, PendingPinPreview>,
+    /// `(graph revision, preview signature)`: the signature is only rehashed
+    /// after the graph has been mutably borrowed, not every frame.
+    pub pin_preview_signature: Option<(u64, u64)>,
+    /// One copy of the graph per previewed state, shared by every pin build
+    /// for that state instead of cloning the graph per pin.
+    pub pin_preview_snapshot: Option<(u64, std::sync::Arc<BlueprintGraph>)>,
+    /// Holds pin builds back until rapid edits settle.
+    pub pin_preview_debounce: crate::rendering::graph::PreviewDebounce,
+    /// Why pin previews failed to build, by cache key. Shown in the
+    /// Compiler Output panel; cleared when the pin builds or goes away.
+    pub pin_preview_errors: HashMap<String, PinPreviewError>,
     pub canvas_origin: Rc<RefCell<Point<f32>>>,
     pub element_bounds: Option<Bounds<Pixels>>,
     pub graph_anim_start: std::time::Instant,
@@ -440,13 +460,17 @@ impl GraphCanvasPanel {
             is_library_macro: false,
             library_id: None,
             panel,
-            graph,
+            graph: Tracked::new(graph),
             undo_manager: UndoManager::new(),
             focus_handle: cx.focus_handle(),
             renderer: crate::rendering::gpu::BpRenderer::new(),
             surface: None,
             pin_preview_cache: HashMap::new(),
             pin_preview_pending: HashMap::new(),
+            pin_preview_signature: None,
+            pin_preview_snapshot: None,
+            pin_preview_debounce: Default::default(),
+            pin_preview_errors: HashMap::new(),
             canvas_origin: Rc::new(RefCell::new(Point::new(0.0, 0.0))),
             element_bounds: None,
             graph_anim_start: std::time::Instant::now(),

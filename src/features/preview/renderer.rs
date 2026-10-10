@@ -338,6 +338,8 @@ pub struct ShaderBuild {
     texture_bind_group_layout: Option<BindGroupLayout>,
     texture_bind_group: Option<BindGroup>,
     texture_assets: Vec<Texture>,
+    /// Why the GPU rejected the shader; `None` when `pipeline` was built.
+    pub error: Option<String>,
 }
 
 /// Compile `wgsl_source` into a pipeline. Slow (shader compilation, texture
@@ -450,15 +452,16 @@ pub fn build_shader(inputs: &ShaderBuildInputs, wgsl_source: &str) -> ShaderBuil
         cache: None,
     });
 
-    let pipeline = match smol::block_on(error_scope.pop()) {
+    let (pipeline, error) = match smol::block_on(error_scope.pop()) {
         Some(error) => {
             tracing::error!("Material preview pipeline rejected shader: {error}");
-            None
+            (None, Some(error.to_string()))
         }
-        None => Some(pipeline),
+        None => (Some(pipeline), None),
     };
     ShaderBuild {
         pipeline,
+        error,
         pipeline_layout,
         texture_bind_group_layout,
         texture_bind_group,
@@ -940,5 +943,7 @@ fn fragment_main() -> @location(0) vec4<f32> {
             .join()
             .expect("a rejected shader must not panic the worker");
         assert!(bad.pipeline.is_none(), "a rejected shader yields no pipeline");
+        assert!(good.error.is_none());
+        assert!(bad.error.is_some(), "a rejected shader reports why");
     }
 }

@@ -229,7 +229,15 @@ impl MaterialPreviewPanel {
                 .spawn(async move { super::renderer::build_shader(&inputs, &source) })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                let error = build.error.clone();
                 this.renderer.apply_shader(build);
+                // Surface the outcome in the Compiler Output panel; a later
+                // successful build clears a stale error.
+                if let Some(editor) = this.editor.upgrade() {
+                    editor.update(cx, |editor, cx| {
+                        editor.set_material_preview_error(error, cx)
+                    });
+                }
                 cx.notify();
             });
         }));
