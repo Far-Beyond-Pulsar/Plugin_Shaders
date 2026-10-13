@@ -17,7 +17,6 @@ use crate::core::types::BlueprintNode;
 use crate::editor::panel::{ResizeHandle, ShaderEditorPanel};
 use crate::features::connections::operations::ConnectionDrag;
 use crate::features::preview::MaterialPreviewPanel;
-use crate::features::undo::UndoManager;
 use crate::rendering::gpu::PinPreviewRenderer;
 use crate::rendering::graph::NodeGraphRenderer;
 use crate::ui_components::palette_view::NodePaletteView;
@@ -271,7 +270,7 @@ impl Panel for PreviewPanel {
 /// Main graph canvas panel — a real GPUI entity that owns ALL state for one tab.
 ///
 /// Each open tab is its own `GraphCanvasPanel` entity. It owns the graph, the
-/// per-tab undo history, the GPU surface/renderer, and every piece of
+/// graph's undo history, the GPU surface/renderer, and every piece of
 /// interaction state. The `panel` weak-ref is read-only access to shared data
 /// (library_manager) on the shell editor.
 /// A pin preview being built on a worker for one graph state. Kept after the
@@ -311,7 +310,9 @@ pub struct GraphCanvasPanel {
     /// Revision-tracked so per-frame caches (the pin preview signature) can
     /// tell when the graph may have changed without rehashing it.
     pub graph: Tracked<BlueprintGraph>,
-    pub undo_manager: UndoManager,
+    /// This graph's undo history; the host's for the graph once the
+    /// editor knows its document (`ShaderEditorPanel::adopt_graph_history`).
+    pub history: plugin_editor_api::SharedHistory<crate::features::undo::Command>,
     pub focus_handle: FocusHandle,
 
     // ── GPU renderer (per-canvas) ──────────────────────────────────────────
@@ -461,7 +462,7 @@ impl GraphCanvasPanel {
             library_id: None,
             panel,
             graph: Tracked::new(graph),
-            undo_manager: UndoManager::new(),
+            history: crate::features::undo::new_history(),
             focus_handle: cx.focus_handle(),
             renderer: crate::rendering::gpu::BpRenderer::new(),
             surface: None,

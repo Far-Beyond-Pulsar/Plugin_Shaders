@@ -73,7 +73,10 @@ impl ShaderEditorPanel {
                     );
                     let ew = editor_weak.clone();
                     let panel = cx.new(|cx| {
-                        GraphCanvasPanel::new(ew, tid.clone(), tname, tis_main, tgraph, window, cx)
+                        let mut canvas =
+                            GraphCanvasPanel::new(ew, tid.clone(), tname, tis_main, tgraph, window, cx);
+                        self.adopt_graph_history(&tid, &mut canvas.history);
+                        canvas
                     });
                     (tab.id.clone(), panel)
                 })
