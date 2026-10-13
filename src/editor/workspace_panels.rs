@@ -310,8 +310,8 @@ pub struct GraphCanvasPanel {
     /// Revision-tracked so per-frame caches (the pin preview signature) can
     /// tell when the graph may have changed without rehashing it.
     pub graph: Tracked<BlueprintGraph>,
-    /// This graph's undo history; the host's for the graph once the
-    /// editor knows its document (`ShaderEditorPanel::adopt_graph_history`).
+    /// This graph's undo history, registered with the host once the editor
+    /// knows its document (`ShaderEditorPanel::adopt_graph_history`).
     pub history: plugin_editor_api::SharedHistory<crate::features::undo::Command>,
     pub focus_handle: FocusHandle,
 
