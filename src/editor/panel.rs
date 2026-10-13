@@ -162,8 +162,8 @@ pub struct ShaderEditorPanel {
 
     pub is_dirty: bool, // Whether there are unsaved changes
 
-    // Undo/redo system
-    pub undo_manager: crate::features::undo::UndoManager,
+    /// The host's undo histories (Pulsar-Native#931), once given them.
+    pub undo_service: Option<plugin_editor_api::UndoService>,
 
     // ── GPU renderer ──────────────────────────────────────────────────────────
     pub bp_renderer: crate::rendering::gpu::BpRenderer,
@@ -519,7 +519,7 @@ impl ShaderEditorPanel {
             right_tab: 0,
             dragging_tab: None,
             is_dirty: false,
-            undo_manager: crate::features::undo::UndoManager::new(),
+            undo_service: None,
             bp_renderer: crate::rendering::gpu::BpRenderer::new(),
             bp_surface: None,
             node_context_menu: None,
@@ -725,7 +725,10 @@ impl ShaderEditorPanel {
             let tab_graph = tab.graph.clone();
             let ew = editor_weak.clone();
             let panel = cx.new(|cx| {
-                GraphCanvasPanel::new(ew, tab_id.clone(), tab_name, tab_is_main, tab_graph, window, cx)
+                let mut canvas =
+                    GraphCanvasPanel::new(ew, tab_id.clone(), tab_name, tab_is_main, tab_graph, window, cx);
+                self.adopt_graph_history(&tab_id, &mut canvas.history);
+                canvas
             });
 
             workspace_entity.update(cx, |workspace, cx| {
