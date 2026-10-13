@@ -57,21 +57,21 @@ impl GraphCanvasPanel {
 
 impl crate::editor::panel::ShaderEditorPanel {
     /// Use the host's undo histories (Pulsar-Native#931): each graph's
-    /// history becomes the one kept for that graph of this material,
-    /// shared with every other view of it.
+    /// history is registered there under that graph of this material.
     pub fn set_undo_service(&mut self, service: plugin_editor_api::UndoService, cx: &mut App) {
         self.undo_service = Some(service);
         for (id, canvas) in self.graph_panels.clone() {
-            canvas.update(cx, |canvas, _| self.adopt_graph_history(&id, &mut canvas.history));
+            canvas.update(cx, |canvas, _| self.adopt_graph_history(&id, &canvas.history));
         }
     }
 
-    /// Point a graph's `history` at the host's for it, once the editor
-    /// has the host's histories and knows its material.
+    /// Register a graph's `history` with the host, once the editor has the
+    /// host's histories and knows its material. Another window's editor of
+    /// the same material keeps its own (`UndoService::adopt`).
     pub(crate) fn adopt_graph_history(
         &self,
         graph_id: &str,
-        history: &mut plugin_editor_api::SharedHistory<Command>,
+        history: &plugin_editor_api::SharedHistory<Command>,
     ) {
         if let (Some(service), Some(path)) = (&self.undo_service, &self.current_material_path) {
             let material = plugin_editor_api::DocumentId::for_path(path);
