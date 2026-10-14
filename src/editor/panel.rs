@@ -420,6 +420,11 @@ impl ShaderEditorPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        cx.bind_keys([KeyBinding::new(
+            "f7",
+            crate::core::events::CompileShader,
+            Some("ShaderEditor"),
+        )]);
         let _resizable_state = ResizableState::new(cx);
         let _left_sidebar_resizable_state = ResizableState::new(cx);
 

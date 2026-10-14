@@ -52,6 +52,22 @@ pub struct DisconnectPin {
 pub struct OpenAddNodeMenu;
 
 // ============================================================================
+// Tools menu (Pulsar-Native#1012)
+// ============================================================================
+
+actions!(
+    shader_editor,
+    [
+        /// Compile the shader and refresh the preview (F7).
+        CompileShader,
+        /// Drop unsaved edits and load the shader from disk again.
+        ReloadShaderFromDisk,
+        /// Add a comment box at the centre of the active graph.
+        AddGraphComment,
+    ]
+);
+
+// ============================================================================
 // Cross-Panel Events
 // ============================================================================
 
