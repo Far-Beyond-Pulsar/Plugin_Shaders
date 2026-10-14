@@ -1745,6 +1745,7 @@ dependencies = [
  "profiling 0.1.0",
  "pulsar-multiplayer-core 0.1.0",
  "pulsar_reflection 0.1.0",
+ "rusqlite",
  "serde",
  "serde_json",
  "smol",

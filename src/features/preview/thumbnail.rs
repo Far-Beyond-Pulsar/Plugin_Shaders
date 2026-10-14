@@ -1,7 +1,9 @@
 //! Headless thumbnail rendering for saved material assets.
 
 use super::{mesh, renderer::PreviewRenderer};
-use crate::io::formats::deserialize_shader;
+use crate::{
+    features::compilation::conversion::resolve_texture_asset_path, io::formats::deserialize_shader,
+};
 use image::RgbaImage;
 use psgc::{DataType, GraphDescription};
 use std::path::Path;
@@ -56,7 +58,7 @@ fn compile_material_graph(mut graph: GraphDescription) -> Result<String, String>
                 .and_then(serde_json::Value::as_str)
                 .map(str::trim)
                 .filter(|path| !path.is_empty())
-                .map(str::to_owned)
+                .map(resolve_texture_asset_path)
                 .ok_or_else(|| format!("Texture input '{}' has no selected asset", input.id))?;
             let resource = format!("pulsar_texture_{}", declarations.len());
             node.properties.insert(

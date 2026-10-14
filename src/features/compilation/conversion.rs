@@ -521,12 +521,13 @@ fn lower_texture_sources(
                 continue;
             }
 
-            let path = blueprint_node.properties.get(&pin.id)
+            let stored_value = blueprint_node.properties.get(&pin.id)
                 .map(|value| value.trim()).filter(|value| !value.is_empty())
                 .ok_or_else(|| format!(
                     "Texture sample node '{}' has no texture selected. Choose an image asset in the Details panel.",
                     blueprint_node.title
                 ))?;
+            let path = resolve_texture_asset_path(stored_value);
             let resource_name = format!("pulsar_texture_{}", declarations.len());
             graph_node.properties.insert(
                 pin.id.clone(),
@@ -534,7 +535,7 @@ fn lower_texture_sources(
             );
             declarations.push(format!(
                 "// TextureSrc: {}\n@group(1) @binding({}) var {}: texture_2d<f32>;\n",
-                serde_json::to_string(path).unwrap_or_else(|_| "\"\"".into()),
+                serde_json::to_string(&path).unwrap_or_else(|_| "\"\"".into()),
                 next_binding,
                 resource_name,
             ));
@@ -551,6 +552,33 @@ fn lower_texture_sources(
     }
 
     Ok(declarations.join(""))
+}
+
+/// Resolve a GUID-backed TextureSrc into the project-relative path consumed by
+/// preview renderers. Legacy path strings pass through unchanged.
+pub(crate) fn resolve_texture_asset_path(value: &str) -> String {
+    let Some(reference) = pulsar_reflection::TextureRef::parse(value) else {
+        return value.to_owned();
+    };
+    let Some(root) = engine_state::get_project_path().map(std::path::PathBuf::from) else {
+        return value.to_owned();
+    };
+    engine_fs::open_project_file_index(&root)
+        .ok()
+        .flatten()
+        .and_then(|index| {
+            index
+                .path_for_asset_id_kind("texture", reference.as_str())
+                .ok()
+                .flatten()
+        })
+        .map(|path| {
+            path.strip_prefix(&root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .unwrap_or_else(|| value.to_owned())
 }
 
 fn property_to_psgc_value(value: &str, is_input_property: bool) -> Option<serde_json::Value> {
