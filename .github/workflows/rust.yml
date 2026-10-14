@@ -19,9 +19,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    # This plugin has path dependencies into the Pulsar-Native workspace
-    # (`../blueprint_editor/graph`, `../../../crates/...`), so it builds inside
-    # a Pulsar-Native checkout, at the path Pulsar-Native vendors it under.
+    # Pulsar-Native builds this plugin as a path dependency of `ui_core`,
+    # resolving its Pulsar-Native, WGPUI, SceneDB, reflection and wgpu
+    # dependencies to its own crates through the patches in its root
+    # manifest. Build it the same way: in a Pulsar-Native checkout, at the
+    # path Pulsar-Native vendors it under, as a member of its workspace.
     - uses: actions/checkout@v4
       with:
         repository: Far-Beyond-Pulsar/Pulsar-Native
@@ -30,39 +32,27 @@ jobs:
     - uses: actions/checkout@v4
       with:
         path: pulsar/plugins/vendor/shader_editor
+    - name: Make the plugin a workspace member
+      working-directory: pulsar
+      run: |
+        sed -i '/^exclude = \[/,/^\]/{\#"plugins/vendor/shader_editor",#d}' Cargo.toml
+        sed -i 's#^members = \[#members = [\n    "plugins/vendor/shader_editor",#' Cargo.toml
+        grep -n 'plugins/vendor/shader_editor' Cargo.toml
     - name: Install Linux dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y \
-          pkg-config \
-          libssl-dev \
-          libfontconfig1-dev \
-          libfreetype6-dev \
-          libx11-dev \
-          libxext-dev \
-          libxrender-dev \
-          libxcb1-dev \
-          libxcb-render0-dev \
-          libxcb-shape0-dev \
-          libxcb-xfixes0-dev \
-          libwayland-dev \
-          libxkbcommon-dev \
-          libegl1-mesa-dev \
-          libgl1-mesa-dev \
-          libvulkan-dev \
-          libsqlite3-dev \
-          libgit2-dev \
-          libssh2-1-dev \
-          libzstd-dev \
-          libasound2-dev \
-          libudev-dev
+          pkg-config libssl-dev libfontconfig1-dev libfreetype6-dev \
+          libx11-dev libx11-xcb-dev libwayland-dev libxkbcommon-x11-dev \
+          libasound2-dev libudev-dev \
+          mesa-vulkan-drivers
     - name: Cache Rust build
       uses: Swatinem/rust-cache@v2
       with:
-        workspaces: pulsar/plugins/vendor/shader_editor
+        workspaces: pulsar
     - name: Build
-      working-directory: pulsar/plugins/vendor/shader_editor
-      run: cargo build --verbose
+      working-directory: pulsar
+      run: cargo build -p shader_editor_plugin --verbose
     - name: Run tests
-      working-directory: pulsar/plugins/vendor/shader_editor
-      run: cargo test --verbose
+      working-directory: pulsar
+      run: cargo test -p shader_editor_plugin --verbose

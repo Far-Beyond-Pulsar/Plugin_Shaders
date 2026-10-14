@@ -103,10 +103,9 @@ pub fn snap_to_grid(pos: Point<f32>, _zoom_level: f32) -> Point<f32> {
 /// * `None` - Invalid hex string
 ///
 /// # Examples
-/// ```
-/// # use gpui::*;
-/// let blue = parse_hex_color("#4A90E2");
-/// let transparent_red = parse_hex_color("#FF000080");
+/// ```text
+/// parse_hex_color("#4A90E2")   // opaque blue
+/// parse_hex_color("#FF000080") // half-transparent red
 /// ```
 pub fn parse_hex_color(hex: &str) -> Option<gpui::Hsla> {
     let hex = hex.trim_start_matches('#');
@@ -130,5 +129,21 @@ pub fn parse_hex_color(hex: &str) -> Option<gpui::Hsla> {
         Some(gpui::Hsla::from(rgba))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_hex_color;
+
+    #[test]
+    fn hex_colors_parse_with_and_without_alpha() {
+        let blue = parse_hex_color("#4A90E2").expect("RGB");
+        assert_eq!(blue.a, 1.0);
+        let red = parse_hex_color("FF000080").expect("RGBA, without '#'");
+        assert!((red.a - 128.0 / 255.0).abs() < 1e-6);
+        assert!(red.h.abs() < 1e-6 && (red.s - 1.0).abs() < 1e-6, "red");
+        assert!(parse_hex_color("#12345").is_none());
+        assert!(parse_hex_color("#GG0000").is_none());
     }
 }
