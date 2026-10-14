@@ -586,6 +586,19 @@ impl Render for ShaderEditorPanel {
                 }
                 // TODO: route show_node_picker through active canvas
             }))
+            .on_action(cx.listener(|panel, _: &CompileShader, _window, cx| {
+                if !panel.compilation_status.is_compiling {
+                    panel.start_compilation(cx);
+                }
+            }))
+            .on_action(cx.listener(|panel, _: &ReloadShaderFromDisk, window, cx| {
+                panel.plugin_reload(window, cx);
+            }))
+            .on_action(cx.listener(|panel, _: &AddGraphComment, window, cx| {
+                if let Some(c) = panel.active_canvas().cloned() {
+                    c.update(cx, |canvas, cx| canvas.create_comment_at_center(window, cx));
+                }
+            }))
             .child(ToolbarRenderer::render(self, cx))
             .child(div().flex_1().min_h_0().map(|el| {
                 if let Some(workspace) = &self.workspace {

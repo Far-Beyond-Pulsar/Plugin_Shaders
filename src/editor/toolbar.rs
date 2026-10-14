@@ -23,6 +23,7 @@ use ui::{
     h_flex, ActiveTheme, Disableable, Icon, IconName,
 };
 
+use crate::core::events::{AddGraphComment, CompileShader, ReloadShaderFromDisk};
 use crate::core::types::CompilationState;
 use crate::editor::panel::{MeshType, ShaderEditorPanel};
 use crate::features::shader_model;
@@ -81,6 +82,14 @@ impl ToolbarRenderer {
                 "Redo",
                 history.map(|history| history as _),
             ),
+        );
+        // ── Tools menu: the shader's own tools ───────────────────────────────
+        menus = menus.menu(
+            plugin_editor_api::EditorMenu::new("Tools")
+                .action_if("Compile Shader", CompileShader, !is_compiling)
+                .action("Reload from Disk", ReloadShaderFromDisk)
+                .separator()
+                .action_if("Add Comment", AddGraphComment, active.is_some()),
         );
         if let Some(canvas) = active {
             // Undo/Redo reach the graph the menu is for.
