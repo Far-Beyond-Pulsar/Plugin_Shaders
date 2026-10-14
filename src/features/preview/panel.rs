@@ -149,8 +149,11 @@ impl MaterialPreviewPanel {
         let width = (size.width.to_f64() as u32).max(1);
         let height = (size.height.to_f64() as u32).max(1);
 
-        let Some(surface) =
-            window.create_wgpu_surface(width, height, wgpu::TextureFormat::Bgra8Unorm)
+        // Until the window has a new device after a loss, a new surface is on
+        // the lost one too; the window renders every view again once it has.
+        let Some(surface) = window
+            .create_wgpu_surface(width, height, wgpu::TextureFormat::Bgra8Unorm)
+            .filter(|surface| !surface.is_device_lost())
         else {
             return;
         };
@@ -298,6 +301,21 @@ impl MaterialPreviewPanel {
     }
     fn render_preview(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         profiling::profile_scope!("shader preview: render");
+        // The GPU device was lost: the surface, the renderer's resources and
+        // the compiled material are on it. Start over on the window's new
+        // device, compiling the material again.
+        if self
+            .surface_handle
+            .as_ref()
+            .is_some_and(gpui::WgpuSurfaceHandle::is_device_lost)
+        {
+            tracing::warn!("Shader preview: GPU device lost; rebuilding on the new device");
+            self.surface_handle = None;
+            self.renderer = PreviewRenderer::new();
+            self.shader_build = None;
+            self.last_shader_source = None;
+            self.needs_rebuild = true;
+        }
         if self.needs_rebuild {
             self.rebuild_surface(window, cx);
         }
