@@ -9,13 +9,27 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
 
     runs-on: ubuntu-latest
 
     steps:
+    # This plugin has path dependencies into the Pulsar-Native workspace
+    # (`../blueprint_editor/graph`, `../../../crates/...`), so it builds inside
+    # a Pulsar-Native checkout, at the path Pulsar-Native vendors it under.
     - uses: actions/checkout@v4
+      with:
+        repository: Far-Beyond-Pulsar/Pulsar-Native
+        submodules: recursive
+        path: pulsar
+    - uses: actions/checkout@v4
+      with:
+        path: pulsar/plugins/vendor/shader_editor
     - name: Install Linux dependencies
       run: |
         sudo apt-get update
@@ -39,8 +53,16 @@ jobs:
           libsqlite3-dev \
           libgit2-dev \
           libssh2-1-dev \
-          libzstd-dev
+          libzstd-dev \
+          libasound2-dev \
+          libudev-dev
+    - name: Cache Rust build
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: pulsar/plugins/vendor/shader_editor
     - name: Build
+      working-directory: pulsar/plugins/vendor/shader_editor
       run: cargo build --verbose
     - name: Run tests
+      working-directory: pulsar/plugins/vendor/shader_editor
       run: cargo test --verbose
