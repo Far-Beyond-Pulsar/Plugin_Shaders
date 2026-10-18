@@ -79,3 +79,6 @@ ui-macros = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = 
 # keep a single identity across the engine and Helio.
 [patch."https://github.com/Far-Beyond-Pulsar/SceneDB"]
 pulsar_scenedb = { git = "https://github.com/Far-Beyond-Pulsar//SceneDB", rev = "685b1b0aa212b64912549efd583c93480bea027f" }
+
+[dev-dependencies]
+tempfile = "3"

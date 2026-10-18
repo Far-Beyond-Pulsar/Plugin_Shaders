@@ -10,6 +10,7 @@ pub mod clipboard;
 pub mod comments;
 pub mod compilation;
 pub mod connections;
+pub mod import_companion;
 pub mod nodes;
 pub mod preview;
 pub mod shader_model;

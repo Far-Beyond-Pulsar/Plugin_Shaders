@@ -81,6 +81,11 @@ pub fn register_material_thumbnail_renderer() {
     );
 }
 
+/// The import companion that offers to build materials from the images found
+/// with an imported model. The host registers it with its import pipeline at
+/// startup (the pipeline itself knows nothing about materials).
+pub use features::import_companion::material_import_companion;
+
 impl EditorPlugin for ShaderEditorPlugin {
     fn metadata(&self) -> PluginMetadata {
         PluginMetadata {
