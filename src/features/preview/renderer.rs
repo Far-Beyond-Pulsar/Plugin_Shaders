@@ -215,7 +215,12 @@ fn create_texture_bindings(
                 .map(|root| root.join(relative_path))
                 .unwrap_or_else(|| relative_path.to_path_buf())
         };
-        let decoded = image::open(&resolved_path).map(|image| image.to_rgba8());
+        // A preview sphere never needs a 4K texture: scale the larger side
+        // down before the RGBA conversion, so a material graph sampling
+        // several 4K images does not put hundreds of MiB on the GPU for a
+        // few hundred pixels of preview.
+        let decoded = image::open(&resolved_path)
+            .map(|image| fit_preview_texture(image).to_rgba8());
         let (width, height, pixels) = match decoded {
             Ok(image) => (
                 image.width().max(1),
@@ -945,5 +950,39 @@ fn fragment_main() -> @location(0) vec4<f32> {
         assert!(bad.pipeline.is_none(), "a rejected shader yields no pipeline");
         assert!(good.error.is_none());
         assert!(bad.error.is_some(), "a rejected shader reports why");
+    }
+}
+
+/// The largest side, in texels, a preview texture keeps.
+const PREVIEW_MAX_TEXTURE: u32 = 1024;
+
+/// `image` scaled down (aspect kept) so its larger side is at most
+/// [`PREVIEW_MAX_TEXTURE`]; smaller images are returned as they are.
+fn fit_preview_texture(image: image::DynamicImage) -> image::DynamicImage {
+    let (width, height) = (image.width(), image.height());
+    let longest = width.max(height);
+    if longest <= PREVIEW_MAX_TEXTURE {
+        return image;
+    }
+    let scale = f64::from(PREVIEW_MAX_TEXTURE) / f64::from(longest);
+    image.resize_exact(
+        ((f64::from(width) * scale).round() as u32).max(1),
+        ((f64::from(height) * scale).round() as u32).max(1),
+        image::imageops::FilterType::Triangle,
+    )
+}
+
+#[cfg(test)]
+mod preview_texture_tests {
+    use super::*;
+
+    #[test]
+    fn large_preview_textures_are_scaled_down_and_small_ones_kept() {
+        let big = image::DynamicImage::new_rgb8(4096, 2048);
+        let fitted = fit_preview_texture(big);
+        assert_eq!((fitted.width(), fitted.height()), (1024, 512));
+        let small = image::DynamicImage::new_rgb8(300, 200);
+        let kept = fit_preview_texture(small);
+        assert_eq!((kept.width(), kept.height()), (300, 200));
     }
 }
