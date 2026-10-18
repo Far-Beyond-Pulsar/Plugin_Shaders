@@ -60,22 +60,27 @@ impl ImportCompanion for MaterialFromImages {
             .file_stem()
             .and_then(|stem| stem.to_str())
             .unwrap_or("model");
-        let folder = context
-            .native_asset
-            .parent()
-            .unwrap_or(context.project_root)
-            .join(format!("{stem}_materials"));
+        // Beside the mesh, wherever the user keeps it: nesting is theirs to do.
+        let folder = context.native_asset.parent().unwrap_or(context.project_root);
+        // The name must not depend on how many surfaces have images, or a
+        // re-import after adding a texture would make a second set.
+        let single = context.surfaces.len() == 1;
 
         let mut outputs = Vec::new();
         let mut used_names = Vec::<String>::new();
         for surface in context.surfaces.iter().filter(|s| !s.images.is_empty()) {
-            let name = unique_name(file_safe_name(surface), &used_names);
+            let name = if single {
+                stem.to_owned()
+            } else {
+                format!("{stem}_{}", file_safe_name(surface))
+            };
+            let name = unique_name(name, &used_names);
             used_names.push(name.clone());
             let material = folder.join(format!("{name}.material"));
             // A material that exists may have been edited: keep it, and still
             // report it so the import keeps owning (and assigning) it.
             if !material.join(GRAPH_FILE).exists() {
-                write_material(&material, surface, context.project_root)?;
+                write_material(&material, folder, surface, context.project_root)?;
             }
             outputs.push(CompanionOutput {
                 path: material,
@@ -120,10 +125,11 @@ fn unique_name(name: String, used: &[String]) -> String {
 
 fn write_material(
     material: &Path,
+    folder: &Path,
     surface: &SourceSurface,
     project_root: &Path,
 ) -> Result<(), String> {
-    let graph = build_graph(surface, |image| texture_reference(image, material, project_root))?;
+    let graph = build_graph(surface, |image| texture_reference(image, folder, project_root))?;
     let asset = ShaderAsset::from_components(graph, None);
     let text = serialize_shader_with_header(&asset)?;
     std::fs::create_dir_all(material)
@@ -132,16 +138,17 @@ fn write_material(
 }
 
 /// How the graph names `image`: project-relative when it is in the project,
-/// otherwise a copy beside the material (a material can only sample project
-/// files).
-fn texture_reference(image: &Path, material: &Path, project_root: &Path) -> Result<String, String> {
+/// otherwise a copy in `folder`, beside the mesh (a material can only sample
+/// project files). An existing file of that name is left alone.
+fn texture_reference(image: &Path, folder: &Path, project_root: &Path) -> Result<String, String> {
     let inside = if image.starts_with(project_root) {
         image.to_path_buf()
     } else {
-        let textures = material.with_extension("textures");
-        std::fs::create_dir_all(&textures).map_err(|error| error.to_string())?;
-        let copy = textures.join(image.file_name().ok_or("image has no file name")?);
-        std::fs::copy(image, &copy).map_err(|error| format!("copy {}: {error}", image.display()))?;
+        let copy = folder.join(image.file_name().ok_or("image has no file name")?);
+        if !copy.exists() {
+            std::fs::copy(image, &copy)
+                .map_err(|error| format!("copy {}: {error}", image.display()))?;
+        }
         copy
     };
     Ok(inside
@@ -210,6 +217,8 @@ fn build_graph(
             SourceImageRole::MetallicRoughness => {
                 &[(Some("component_g"), "roughness"), (Some("component_b"), "metallic")]
             }
+            SourceImageRole::Roughness => &[(Some("component_r"), "roughness")],
+            SourceImageRole::Metallic => &[(Some("component_r"), "metallic")],
             SourceImageRole::Occlusion => &[(Some("component_r"), "ambient_occlusion")],
             SourceImageRole::Normal => &[],
         };
@@ -294,6 +303,8 @@ mod tests {
         let outputs = MaterialFromImages.run(&context).unwrap();
         assert_eq!(outputs.len(), 1, "only surfaces with images get a material");
         assert_eq!(outputs[0].assign_to_slot, Some(1));
+        // Flat: beside the mesh, named for the model and surface.
+        assert_eq!(outputs[0].path, root.join("rock_Rock_Wall.material"));
         let graph_file = outputs[0].path.join(GRAPH_FILE);
         let written = std::fs::read_to_string(&graph_file).unwrap();
         let asset = deserialize_shader(&written).unwrap();
@@ -305,6 +316,36 @@ mod tests {
         std::fs::write(&graph_file, "edited").unwrap();
         MaterialFromImages.run(&context).unwrap();
         assert_eq!(std::fs::read_to_string(&graph_file).unwrap(), "edited");
+    }
+
+    #[test]
+    fn a_single_surface_model_gets_one_material_named_for_the_model_and_images_outside_the_project_are_copied_flat(
+    ) {
+        let outside = tempfile::tempdir().unwrap();
+        let project = tempfile::tempdir().unwrap();
+        let root = project.path();
+        let sub = root.join("props");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(outside.path().join("a_BaseColor.jpg"), b"jpg").unwrap();
+        let surfaces = vec![SourceSurface {
+            slot: 0,
+            name: "Material.001".into(),
+            images: vec![plugin_editor_api::SourceImage {
+                role: SourceImageRole::BaseColor,
+                path: outside.path().join("a_BaseColor.jpg"),
+            }],
+        }];
+        let context = ImportCompanionContext {
+            project_root: root,
+            source: &sub.join("crate.fbx"),
+            native_asset: &sub.join("crate.mesh"),
+            surfaces: &surfaces,
+        };
+        let outputs = MaterialFromImages.run(&context).unwrap();
+        assert_eq!(outputs[0].path, sub.join("crate.material"));
+        assert!(sub.join("a_BaseColor.jpg").exists());
+        let written = std::fs::read_to_string(sub.join("crate.material").join(GRAPH_FILE)).unwrap();
+        assert!(written.contains("props/a_BaseColor.jpg"));
     }
 
     #[test]
