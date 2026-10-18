@@ -190,8 +190,8 @@ fn connect(graph: &mut GraphDescription, from: &str, to: &str, pin: &str) {
 }
 
 /// One image sample per image, wired to the output pin its role feeds. A
-/// normal map is sampled but left unwired: the output's normal pin is
-/// world-space and the tangent-space decode is the artist's call.
+/// normal map goes through a `normal_map` node first: the output's normal pin
+/// takes a world-space `vec3`, and the sample is a tangent-space `vec4`.
 fn build_graph(
     surface: &SourceSurface,
     mut reference: impl FnMut(&Path) -> Result<String, String>,
@@ -220,22 +220,108 @@ fn build_graph(
             SourceImageRole::Roughness => &[(Some("component_r"), "roughness")],
             SourceImageRole::Metallic => &[(Some("component_r"), "metallic")],
             SourceImageRole::Occlusion => &[(Some("component_r"), "ambient_occlusion")],
-            SourceImageRole::Normal => &[],
+            SourceImageRole::Normal => &[(None, "normal")],
         };
         for (channel, pin) in feeds {
-            match channel {
-                None => connect(&mut graph, &sample, "output", pin),
-                Some(kind) => {
-                    let id = format!("{kind}_{row}");
-                    graph.add_node(node(&id, kind, 600.0, y)?);
-                    connect(&mut graph, &sample, &id, "vec");
-                    connect(&mut graph, &id, "output", pin);
-                }
-            }
+            feed_pin(&mut graph, &sample, *channel, pin, row, y)?;
         }
     }
     Ok(graph)
 }
+
+/// The WGSL type of the output pin `pin` of the shader node `kind`.
+fn param_type(kind: &str, pin: &str) -> Option<String> {
+    psgc::get_shader_nodes()
+        .into_iter()
+        .find(|meta| meta.name == kind)?
+        .params
+        .into_iter()
+        .find(|param| param.name == pin)
+        .map(|param| param.param_type)
+}
+
+/// The WGSL type the shader node `kind` returns.
+fn return_type(kind: &str) -> Option<String> {
+    psgc::get_shader_nodes()
+        .into_iter()
+        .find(|meta| meta.name == kind)?
+        .return_type
+        .map(|ty| ty.type_string)
+}
+
+/// The conversion node that turns a `from` value into a `to` value, with the
+/// name of its input pin.
+fn conversion_node(from: &str, to: &str) -> Option<(String, String)> {
+    psgc::get_shader_nodes().into_iter().find_map(|meta| {
+        let conversion = meta.conversion.as_ref()?;
+        (conversion.from_type.type_string == from && conversion.to_type.type_string == to)
+            .then(|| Some((meta.name.clone(), meta.params.first()?.name.clone())))
+            .flatten()
+    })
+}
+
+/// Feed an image sample to the output pin `pin`, adding whatever nodes the
+/// pin's type needs. The sample is a `vec4`; the importer reads the type the
+/// pin declares and builds the path to it:
+///
+/// - a channel pick when the role names a channel (`vec4` to `f32`);
+/// - a `normal_map` decode for the `normal` pin, which takes a world-space
+///   `vec3` and not a tangent-space texel;
+/// - the registered conversion node for any other mismatch.
+///
+/// A pin with no way to get its type from the sample is an error, so the
+/// importer never writes a graph whose connection the compiler would reject.
+fn feed_pin(
+    graph: &mut GraphDescription,
+    sample: &str,
+    channel: Option<&str>,
+    pin: &str,
+    row: usize,
+    y: f64,
+) -> Result<(), String> {
+    let target = param_type("fragment_output", pin)
+        .ok_or_else(|| format!("the material output has no '{pin}' pin"))?;
+    let mut from = sample.to_string();
+    let mut current = return_type("sample_texture").ok_or("sample_texture has no type")?;
+
+    if let Some(kind) = channel {
+        let id = format!("{kind}_{row}_{pin}");
+        graph.add_node(node(&id, kind, 600.0, y)?);
+        connect(graph, &from, &id, "vec");
+        current = return_type(kind).ok_or_else(|| format!("{kind} has no type"))?;
+        from = id;
+    }
+
+    if pin == "normal" && current == "vec4<f32>" {
+        // The decode builds a tangent frame from the surface normal and world
+        // position; every normal map shares those two inputs.
+        for (id, kind) in [("normal_in", "frag_normal"), ("position_in", "world_position")] {
+            if !graph.nodes.contains_key(id) {
+                graph.add_node(node(id, kind, 300.0, y + 110.0)?);
+            }
+        }
+        let decode = format!("normal_map_{row}");
+        graph.add_node(node(&decode, "normal_map", 600.0, y)?);
+        connect(graph, &from, &decode, "texel");
+        connect(graph, "uv", &decode, "uv");
+        connect(graph, "normal_in", &decode, "normal");
+        connect(graph, "position_in", &decode, "position");
+        current = return_type("normal_map").ok_or("normal_map has no type")?;
+        from = decode;
+    }
+
+    if current != target {
+        let (kind, input) = conversion_node(&current, &target)
+            .ok_or_else(|| format!("no conversion from {current} to {target} for '{pin}'"))?;
+        let id = format!("{kind}_{row}_{pin}");
+        graph.add_node(node(&id, &kind, 750.0, y)?);
+        connect(graph, &from, &id, &input);
+        from = id;
+    }
+    connect(graph, &from, "output", pin);
+    Ok(())
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -275,13 +361,68 @@ mod tests {
                 .any(|c| c.target_node == "output" && c.target_pin == pin)
         };
         assert!(into_output("base_color") && into_output("roughness") && into_output("metallic"));
-        // The normal map is sampled but not wired.
-        assert!(graph.nodes.contains_key("sample_2"));
-        assert!(!graph.connections.iter().any(|c| c.source_node == "sample_2" && c.target_node == "output"));
+        // The normal map is decoded to a world-space vec3 and feeds `normal`.
+        assert!(into_output("normal"));
+        assert_eq!(graph.nodes["normal_map_2"].node_type, "normal_map");
+        let feeds = |from: &str, pin: &str| {
+            graph.connections.iter().any(|c| {
+                c.source_node == from && c.target_node == "normal_map_2" && c.target_pin == pin
+            })
+        };
+        assert!(feeds("sample_2", "texel") && feeds("uv", "uv"));
+        assert!(feeds("normal_in", "normal") && feeds("position_in", "position"));
+        assert!(graph
+            .connections
+            .iter()
+            .all(|c| !(c.source_node == "sample_2" && c.target_node == "output")));
         assert_eq!(
             graph.nodes["sample_1"].properties["texture"],
             serde_json::json!("mr.png")
         );
+    }
+
+
+    #[test]
+    fn every_connection_matches_the_type_its_pin_declares() {
+        let graph = build_graph(
+            &surface(&[
+                (SourceImageRole::BaseColor, "a.png"),
+                (SourceImageRole::MetallicRoughness, "mr.png"),
+                (SourceImageRole::Occlusion, "o.png"),
+                (SourceImageRole::Emissive, "e.png"),
+                (SourceImageRole::Normal, "n.png"),
+            ]),
+            |path| Ok(path.to_string_lossy().into_owned()),
+        )
+        .unwrap();
+        for connection in graph.connections.iter().filter(|c| c.target_node == "output") {
+            let source = &graph.nodes[&connection.source_node].node_type;
+            assert_eq!(
+                return_type(source),
+                param_type("fragment_output", &connection.target_pin),
+                "{} ({source}) into {}",
+                connection.source_node,
+                connection.target_pin
+            );
+        }
+    }
+
+    #[test]
+    fn a_mismatched_pin_gets_the_registered_conversion_and_an_impossible_one_is_an_error() {
+        assert_eq!(
+            conversion_node("vec4<f32>", "vec3<f32>"),
+            Some(("vec4_to_vec3".to_string(), "input".to_string()))
+        );
+        assert!(conversion_node("vec4<f32>", "TextureSrc").is_none());
+
+        // `normal_in` is a vec3 into a vec4 pin: one conversion node between.
+        let mut graph = GraphDescription::new("g");
+        graph.add_node(node("output", "fragment_output", 0.0, 0.0).unwrap());
+        graph.add_node(node("normal_in", "frag_normal", 0.0, 0.0).unwrap());
+        let (kind, input) = conversion_node("vec3<f32>", "vec4<f32>").unwrap();
+        assert_eq!(kind, "vec3_to_vec4");
+        assert_eq!(input, "input");
+        assert!(feed_pin(&mut graph, "sample_0", None, "no_such_pin", 0, 0.0).is_err());
     }
 
     #[test]
