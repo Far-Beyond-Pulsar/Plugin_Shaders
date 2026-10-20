@@ -540,6 +540,38 @@ impl ShaderEditorPanel {
 
 impl Render for ShaderEditorPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(error) = self.load_error.as_deref() {
+            return v_flex()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .bg(cx.theme().background)
+                .child(
+                    v_flex()
+                        .w_full()
+                        .max_w(px(720.))
+                        .gap_3()
+                        .p_6()
+                        .bg(cx.theme().sidebar)
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .rounded_md()
+                        .child(
+                            div()
+                                .text_lg()
+                                .text_color(cx.theme().danger)
+                                .child("Material could not be opened"),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(error.to_string()),
+                        ),
+                )
+                .into_any_element();
+        }
+
         if self.workspace.is_none() {
             self.initialize_workspace(window, cx);
         }
@@ -551,6 +583,7 @@ impl Render for ShaderEditorPanel {
 
         v_flex()
             .size_full()
+            .relative()
             .bg(cx.theme().background)
             .key_context("ShaderEditor")
             .on_action(cx.listener(|panel, action: &DuplicateNode, _window, cx| {
@@ -607,5 +640,42 @@ impl Render for ShaderEditorPanel {
                     el.child(div().child("Initializing workspace..."))
                 }
             }))
+            .when(self.file_loading, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .bg(cx.theme().background.opacity(0.88))
+                        .child(
+                            v_flex()
+                                .items_center()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().foreground)
+                                        .child("Loading Material…"),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(220.))
+                                        .h(px(3.))
+                                        .rounded_full()
+                                        .bg(cx.theme().border)
+                                        .child(
+                                            div()
+                                                .w(px(70.))
+                                                .h_full()
+                                                .rounded_full()
+                                                .bg(cx.theme().primary),
+                                        ),
+                                ),
+                        ),
+                )
+            })
+            .into_any_element()
     }
 }

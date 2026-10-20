@@ -155,33 +155,34 @@ impl ShaderEditorPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
+        let (source_path, asset) = Self::parse_asset_from_path(path)?;
+        self.apply_loaded_asset(source_path, asset, window, cx)
+    }
+
+    /// Read and deserialize a shader without touching UI state. Editor startup
+    /// uses this on the background executor, then applies the result on the UI
+    /// thread once the restored workspace is visible.
+    pub(crate) fn parse_asset_from_path(
+        path: &Path,
+    ) -> Result<(PathBuf, formats::ShaderAsset), String> {
         let source_path = Self::resolve_shader_path(path);
         tracing::info!(
-            ">>> load_from_path: path={:?} resolved={:?}, current open_tabs={}",
+            ">>> parse_asset_from_path: path={:?} resolved={:?}",
             path, source_path,
-            self.open_tabs.len(),
         );
 
-        // Read file content
         let content = std::fs::read_to_string(&source_path)
             .map_err(|e| format!("Failed to read file: {}", e))?;
-        tracing::info!(">>> load_from_path: read {} bytes from {:?}", content.len(), source_path);
+        tracing::info!(
+            ">>> parse_asset_from_path: read {} bytes from {:?}",
+            content.len(),
+            source_path
+        );
 
-        // Try to deserialize as current format first
         let asset = match formats::deserialize_shader(&content) {
-            Ok(asset) => {
-                tracing::info!(
-                    ">>> load_from_path: deserialized as current format, main_graph has {} nodes",
-                    asset.main_graph.nodes.len(),
-                );
-                asset
-            }
+            Ok(asset) => asset,
             Err(_) => {
-                // Try legacy format
-                tracing::info!(">>> load_from_path: Trying to load as legacy format...");
                 let legacy_graph = legacy::try_parse_legacy_format(&content)?;
-
-                // Convert legacy graph to current format
                 formats::ShaderAsset {
                     format_version: formats::current_format_version(),
                     main_graph: legacy_graph,
@@ -190,13 +191,22 @@ impl ShaderEditorPanel {
                 }
             }
         };
+        Ok((source_path, asset))
+    }
 
-        // Load the asset into the editor
+    /// Apply a parsed asset to the live editor. This must run on the UI thread.
+    pub(crate) fn apply_loaded_asset(
+        &mut self,
+        source_path: PathBuf,
+        asset: formats::ShaderAsset,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
         self.load_shader_asset(asset, window, cx)?;
         self.set_path(source_path);
 
         tracing::info!(
-            ">>> load_from_path: done. open_tabs={}, graph_panels={}, self.graph.nodes={}",
+            ">>> apply_loaded_asset: done. open_tabs={}, graph_panels={}, self.graph.nodes={}",
             self.open_tabs.len(),
             self.graph_panels.len(),
             self.graph.nodes.len(),
