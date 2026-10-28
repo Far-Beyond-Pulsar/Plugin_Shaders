@@ -144,6 +144,9 @@ impl ShaderEditorPanel {
             .comments
             .iter()
             .map(|c| graphy::core::GraphComment {
+                id: c.id.clone(),
+                color: graphy::core::GraphComment::default_color(),
+                contained_node_ids: Vec::new(),
                 text: c.text.clone(),
                 position: Position {
                     x: c.position.x as f64,
