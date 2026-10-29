@@ -6,13 +6,13 @@ use ui::{
     dock::{Panel, PanelEvent, PanelState},
     h_flex,
     scroll::Scrollbar,
-    v_flex, v_virtual_list, ActiveTheme, StyledExt,
+    v_flex, v_virtual_list, ActiveTheme,
 };
 
 use super::panel::ShaderEditorPanel;
 use super::toolbar::ToolbarRenderer;
-use crate::core::events::*;
-use crate::rendering::graph::NodeGraphRenderer;
+use crate::actions::*;
+use crate::features::compilation::CompilationState;
 
 impl Panel for ShaderEditorPanel {
     fn panel_name(&self) -> &'static str {
@@ -21,6 +21,10 @@ impl Panel for ShaderEditorPanel {
 
     fn panel_file_path(&self, _cx: &App) -> Option<std::path::PathBuf> {
         self.current_material_path.clone()
+    }
+
+    fn tab_unsaved(&self, _cx: &App) -> bool {
+        self.is_dirty()
     }
 
     fn title(&self, _window: &Window, _cx: &App) -> AnyElement {
@@ -50,13 +54,10 @@ impl Focusable for ShaderEditorPanel {
 }
 
 impl EventEmitter<PanelEvent> for ShaderEditorPanel {}
-impl EventEmitter<OpenEngineLibraryRequest> for ShaderEditorPanel {}
-impl EventEmitter<ShowNodePickerRequest> for ShaderEditorPanel {}
 
 impl ShaderEditorPanel {
     /// Render compiler results panel (compilation history and status)
     pub fn render_compiler_results(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        use crate::core::types::CompilationState;
 
         let history_entries: Vec<_> = self.compilation_history.iter().rev().cloned().collect();
         let item_sizes = std::rc::Rc::new(
@@ -71,16 +72,12 @@ impl ShaderEditorPanel {
         if let Some(message) = &self.material_preview_error {
             preview_errors.push(("Material preview".to_string(), message.clone()));
         }
-        for (_, canvas) in &self.graph_panels {
-            let mut pin_errors: Vec<_> = canvas.read(cx).pin_preview_errors.iter().collect();
-            pin_errors.sort_by(|a, b| a.0.cmp(b.0));
-            preview_errors.extend(pin_errors.into_iter().map(|(_, error)| {
-                (
-                    format!("Pin preview: {}", error.label),
-                    error.message.clone(),
-                )
-            }));
-        }
+        preview_errors.extend(self.previews.errors().into_iter().map(|error| {
+            (
+                format!("Pin preview: {}", error.label),
+                error.message,
+            )
+        }));
         let compiler_entity = cx.entity().clone();
         let scroll_handle = self.compiler_output_scroll_handle.clone();
         let scrollbar_state = self.compiler_output_scrollbar_state.clone();
@@ -299,25 +296,31 @@ impl ShaderEditorPanel {
             )
     }
 
+    /// The graph index: every node, in id order. A click selects the node and
+    /// brings it into view.
     pub fn render_find_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        // Read nodes from the live canvas if available; fall back to self.graph shadow.
-        let (node_count, comment_count, nodes, selected_nodes) =
-            if let Some(canvas) = self.active_canvas() {
-                let g = canvas.read(cx).graph.clone();
-                (
-                    g.nodes.len(),
-                    g.comments.len(),
-                    g.nodes.clone(),
-                    g.selected_nodes.clone(),
-                )
-            } else {
-                (
-                    self.graph.nodes.len(),
-                    self.graph.comments.len(),
-                    self.graph.nodes.clone(),
-                    self.graph.selected_nodes.clone(),
-                )
-            };
+        let (node_count, comment_count, nodes, selected_nodes) = {
+            let canvas = self.canvas.read(cx);
+            let graph = canvas.graph();
+            let mut nodes: Vec<(String, String, (f64, f64))> = graph
+                .nodes
+                .values()
+                .map(|n| {
+                    (
+                        n.id.clone(),
+                        crate::features::compilation::lowering::node_title(n),
+                        (n.position.x, n.position.y),
+                    )
+                })
+                .collect();
+            nodes.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+            (
+                graph.nodes.len(),
+                graph.comments.len(),
+                nodes,
+                canvas.controller().selection.nodes.clone(),
+            )
+        };
         let item_sizes = std::rc::Rc::new(
             nodes
                 .iter()
@@ -384,12 +387,11 @@ impl ShaderEditorPanel {
                                 move |_panel, range, _window, cx| {
                                     range
                                         .map(|ix| -> AnyElement {
-                                            let Some(node) = nodes.get(ix) else {
+                                            let Some((node_id, node_title, position)) = nodes.get(ix)
+                                            else {
                                                 return div().h(px(34.0)).into_any_element();
                                             };
-
-                                            let node_id = node.id.clone();
-                                            let node_title = node.title.clone();
+                                            let node_id = node_id.clone();
                                             let is_selected = selected_nodes.contains(&node_id);
 
                                             h_flex()
@@ -410,19 +412,14 @@ impl ShaderEditorPanel {
                                                 .on_mouse_down(
                                                     gpui::MouseButton::Left,
                                                     cx.listener(move |panel, _, _window, cx| {
-                                                        panel.graph.selected_nodes.clear();
-                                                        panel
-                                                            .graph
-                                                            .selected_nodes
-                                                            .push(node_id.clone());
-                                                        cx.notify();
+                                                        panel.focus_node(&node_id, cx);
                                                     }),
                                                 )
                                                 .child(
                                                     div()
                                                         .text_xs()
                                                         .text_color(cx.theme().foreground)
-                                                        .child(node_title),
+                                                        .child(node_title.clone()),
                                                 )
                                                 .child(
                                                     div()
@@ -430,7 +427,7 @@ impl ShaderEditorPanel {
                                                         .text_color(cx.theme().muted_foreground)
                                                         .child(format!(
                                                             "({:.0}, {:.0})",
-                                                            node.position.x, node.position.y
+                                                            position.0, position.1
                                                         )),
                                                 )
                                                 .into_any_element()
@@ -448,92 +445,6 @@ impl ShaderEditorPanel {
                                 .child(Scrollbar::vertical(&scrollbar_state, &scroll_handle)),
                         )
                     }),
-            )
-    }
-
-    pub fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        use ui::IconName;
-
-        h_flex()
-            .w_full()
-            .h(px(32.0))
-            .bg(cx.theme().secondary)
-            .border_b_1()
-            .border_color(cx.theme().border)
-            .items_center()
-            .overflow_x_hidden()
-            .child(
-                h_flex()
-                    .items_center()
-                    .children(self.open_tabs.iter().enumerate().map(|(index, tab)| {
-                        let is_active = index == self.active_tab_index;
-
-                        h_flex()
-                            .items_center()
-                            .gap_1p5()
-                            .px_3()
-                            .h_full()
-                            .bg(if is_active {
-                                cx.theme().background
-                            } else {
-                                gpui::transparent_black()
-                            })
-                            .when(is_active, |this| {
-                                this.border_t_2().border_color(cx.theme().accent)
-                            })
-                            .when(!is_active, |this| {
-                                this.hover(|s| s.bg(cx.theme().muted.opacity(0.1)))
-                            })
-                            .cursor_pointer()
-                            .child(
-                                ui::Icon::new(if tab.is_main {
-                                    IconName::Play
-                                } else {
-                                    IconName::Component
-                                })
-                                .size(px(14.0))
-                                .text_color(if is_active {
-                                    cx.theme().accent
-                                } else {
-                                    cx.theme().muted_foreground
-                                }),
-                            )
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .when(is_active, |s| s.font_weight(gpui::FontWeight::SEMIBOLD))
-                                    .text_color(if is_active {
-                                        cx.theme().foreground
-                                    } else {
-                                        cx.theme().muted_foreground
-                                    })
-                                    .child(tab.name.clone()),
-                            )
-                            .when(tab.is_dirty, |this| {
-                                this.child(
-                                    div()
-                                        .w(px(6.0))
-                                        .h(px(6.0))
-                                        .rounded_full()
-                                        .bg(cx.theme().accent),
-                                )
-                            })
-                            .on_mouse_down(
-                                gpui::MouseButton::Left,
-                                cx.listener(move |this, _, window, cx| {
-                                    this.switch_to_tab(index, window, cx);
-                                }),
-                            )
-                    })),
-            )
-            .child(div().flex_1())
-            .child(
-                h_flex().items_center().gap_1().px_2().child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("Tabs"),
-                ),
             )
     }
 }
@@ -576,49 +487,11 @@ impl Render for ShaderEditorPanel {
             self.initialize_workspace(window, cx);
         }
 
-        // Comment color bindings are per-canvas; refresh via the active canvas
-        if let Some(c) = self.active_canvas().cloned() {
-            c.update(cx, |canvas, cx| canvas.refresh_comment_color_bindings(window, cx));
-        }
-
         v_flex()
             .size_full()
             .relative()
             .bg(cx.theme().background)
             .key_context("ShaderEditor")
-            .on_action(cx.listener(|panel, action: &DuplicateNode, _window, cx| {
-                let nid = action.node_id.clone();
-                if let Some(c) = panel.active_canvas().cloned() { c.update(cx, |canvas, cx| canvas.duplicate_node(nid, cx)); }
-            }))
-            .on_action(cx.listener(|panel, action: &DeleteNode, _window, cx| {
-                let nid = action.node_id.clone();
-                if let Some(c) = panel.active_canvas().cloned() { c.update(cx, |canvas, cx| canvas.delete_node(nid, cx)); }
-            }))
-            .on_action(cx.listener(|panel, action: &CopyNode, _window, cx| {
-                let nid = action.node_id.clone();
-                if let Some(c) = panel.active_canvas().cloned() { c.update(cx, |canvas, cx| canvas.copy_node(nid, cx)); }
-            }))
-            .on_action(cx.listener(|panel, _action: &PasteNode, _window, cx| {
-                if let Some(c) = panel.active_canvas().cloned() { c.update(cx, |canvas, cx| canvas.paste_node(cx)); }
-            }))
-            .on_action(cx.listener(|panel, action: &DisconnectPin, _window, cx| {
-                let nid = action.node_id.clone();
-                let pid = action.pin_id.clone();
-                if let Some(c) = panel.active_canvas().cloned() { c.update(cx, |canvas, cx| canvas.disconnect_pin(nid, pid, cx)); }
-            }))
-            .on_action(cx.listener(|panel, _action: &OpenAddNodeMenu, window, cx| {
-                if let Some(c) = panel.active_canvas().cloned() {
-                    c.update(cx, |canvas, cx| {
-                        if let Some(bounds) = canvas.element_bounds {
-                            let sc = Point::new(bounds.center().x, bounds.center().y);
-                            let gp = NodeGraphRenderer::screen_to_graph_pos(sc, &canvas.graph);
-                            // drop canvas borrow before calling show_node_picker on panel
-                            let _ = gp;
-                        }
-                    });
-                }
-                // TODO: route show_node_picker through active canvas
-            }))
             .on_action(cx.listener(|panel, _: &CompileShader, _window, cx| {
                 if !panel.compilation_status.is_compiling {
                     panel.start_compilation(cx);
@@ -627,10 +500,8 @@ impl Render for ShaderEditorPanel {
             .on_action(cx.listener(|panel, _: &ReloadShaderFromDisk, window, cx| {
                 panel.plugin_reload(window, cx);
             }))
-            .on_action(cx.listener(|panel, _: &AddGraphComment, window, cx| {
-                if let Some(c) = panel.active_canvas().cloned() {
-                    c.update(cx, |canvas, cx| canvas.create_comment_at_center(window, cx));
-                }
+            .on_action(cx.listener(|panel, _: &AddGraphComment, _window, cx| {
+                panel.add_comment(cx);
             }))
             .child(ToolbarRenderer::render(self, cx))
             .child(div().flex_1().min_h_0().map(|el| {

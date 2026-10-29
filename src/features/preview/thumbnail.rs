@@ -1,11 +1,8 @@
 //! Headless thumbnail rendering for saved material assets.
 
 use super::{mesh, renderer::PreviewRenderer};
-use crate::{
-    features::compilation::conversion::resolve_texture_asset_path, io::formats::deserialize_shader,
-};
+use crate::{features::compilation::lowering::compile_graph_to_wgsl, io::formats::deserialize_shader};
 use image::RgbaImage;
-use psgc::{DataType, GraphDescription};
 use std::path::Path;
 
 const THUMBNAIL_SIZE: u32 = 128;
@@ -20,7 +17,7 @@ pub fn render_material_thumbnail(path: &Path) -> Option<RgbaImage> {
     };
     let contents = std::fs::read_to_string(&graph_path).ok()?;
     let asset = deserialize_shader(&contents).ok()?;
-    let wgsl = compile_material_graph(asset.main_graph)
+    let wgsl = compile_graph_to_wgsl(&asset.main_graph)
         .map_err(|error| {
             tracing::warn!(
                 "Could not compile material thumbnail for {:?}: {}",
@@ -31,56 +28,6 @@ pub fn render_material_thumbnail(path: &Path) -> Option<RgbaImage> {
         })
         .ok()?;
     render_first_frame(&wgsl)
-}
-
-fn compile_material_graph(mut graph: GraphDescription) -> Result<String, String> {
-    let mut declarations = Vec::new();
-    let mut binding = 1u32;
-    for node in graph.nodes.values_mut() {
-        for input in &mut node.inputs {
-            let is_texture_src = match &input.pin.data_type {
-                DataType::Data(type_info) => type_info.type_string == "TextureSrc",
-                DataType::Exec => false,
-            };
-            if !is_texture_src {
-                continue;
-            }
-            input.pin.data_type = DataType::typed("texture_2d<f32>");
-            if graph.connections.iter().any(|connection| {
-                connection.target_node == node.id && connection.target_pin == input.id
-            }) {
-                continue;
-            }
-
-            let path = node
-                .properties
-                .get(&input.id)
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|path| !path.is_empty())
-                .map(resolve_texture_asset_path)
-                .ok_or_else(|| format!("Texture input '{}' has no selected asset", input.id))?;
-            let resource = format!("pulsar_texture_{}", declarations.len());
-            node.properties.insert(
-                input.id.clone(),
-                serde_json::Value::String(resource.clone()),
-            );
-            declarations.push(format!(
-                "// TextureSrc: {}\n@group(1) @binding({binding}) var {resource}: texture_2d<f32>;\n",
-                serde_json::to_string(&path).unwrap_or_else(|_| "\"\"".into()),
-            ));
-            binding += 1;
-        }
-    }
-    if !declarations.is_empty() {
-        declarations.insert(
-            0,
-            "@group(1) @binding(0) var texture_sampler: sampler;\n".into(),
-        );
-    }
-    let shader = psgc::compile_shader(&graph)
-        .map_err(|error| format!("WGSL compilation failed: {error}"))?;
-    Ok(format!("{}{shader}", declarations.concat()))
 }
 
 fn render_first_frame(wgsl: &str) -> Option<RgbaImage> {
@@ -220,10 +167,10 @@ fn config_size(config: &wgpu::SurfaceConfiguration) -> wgpu::Extent3d {
 #[cfg(test)]
 mod tests {
     use super::render_material_thumbnail;
-    use crate::core::definitions::NodeDefinitions;
+    use crate::definitions::NodeDefinitions;
     use crate::io::formats::{serialize_shader_with_header, ShaderAsset};
     use psgc::{
-        Connection, ConnectionType, DataType, GraphDescription, NodeInstance, Pin, PinInstance,
+        Connection, ConnectionType, GraphDescription, NodeInstance, Pin, PinInstance,
         PinType, Position,
     };
     use std::path::PathBuf;
@@ -234,11 +181,7 @@ mod tests {
             .unwrap_or_else(|| panic!("missing test node definition: {id}"));
         let mut node = NodeInstance::new(id, id, Position { x: 0.0, y: 0.0 });
         for input in &definition.inputs {
-            let data_type = if input.data_type.is_execution() {
-                DataType::Exec
-            } else {
-                DataType::typed(input.data_type.type_name.clone())
-            };
+            let data_type = input.data_type.clone();
             node.inputs.push(PinInstance::new(
                 input.id.clone(),
                 Pin::new(
@@ -250,11 +193,7 @@ mod tests {
             ));
         }
         for output in &definition.outputs {
-            let data_type = if output.data_type.is_execution() {
-                DataType::Exec
-            } else {
-                DataType::typed(output.data_type.type_name.clone())
-            };
+            let data_type = output.data_type.clone();
             node.outputs.push(PinInstance::new(
                 output.id.clone(),
                 Pin::new(
@@ -287,7 +226,7 @@ mod tests {
             ConnectionType::Data,
         ));
 
-        let asset = ShaderAsset::from_components(graph, None);
+        let asset = ShaderAsset::with_graph(graph);
         let serialized = serialize_shader_with_header(&asset).expect("serialize test material");
         let path = std::env::temp_dir().join(format!(
             "pulsar-material-thumbnail-{}.material",

@@ -13,7 +13,10 @@ path = "examples/standalone.rs"
 
 
 [dependencies]
-blueprint_graph = { path = "../blueprint_editor/graph" }
+graphy-blueprint = { path = "../../../crates/third-party/graphy/crates/graphy-blueprint" }
+# The shared graph canvas: layout, drawing, hit-testing, input and the profile API.
+graphy-render = { path = "../../../crates/third-party/graphy/crates/graphy-render" }
+graphy-gpui = { path = "../../../crates/third-party/graphy/crates/graphy-gpui", features = ["gpui"] }
 profiling = { path = "../../../crates/profiling" }
 # UI dependencies (local paths so traits resolve to the same crate instance)
 gpui-ce = { git = "https://github.com/Far-Beyond-Pulsar/WGPUI", rev = "98e312efa8601b1244215c79aac88acb5e169e03" }
@@ -43,11 +46,9 @@ engine_fs = { path = "../../../crates/core/engine_fs" }
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.149"
-schemars = "1.0"
 
 # For async operations
 futures = "0.3"
-arboard = "3.4"
 anyhow = "1.0"
 wgpu = { version = "30.0.0", default-features = false, features = [
     "web",
@@ -58,7 +59,6 @@ wgpu = { version = "30.0.0", default-features = false, features = [
 ] }
 naga = { version = "30.0.0", features = ["wgsl-in"] }
 parking_lot = "0.12"
-fontdue = "0.9"
 bytemuck = { version = "1", features = ["derive"] }
 tool_registry = { git = "https://github.com/Far-Beyond-Pulsar/ToolbeltRS", rev = "116b9028bad6b9467073de2534be60ef4df9b279" }
 tool_registry_macros = { git = "https://github.com/Far-Beyond-Pulsar/ToolbeltRS", rev = "116b9028bad6b9467073de2534be60ef4df9b279" }
@@ -80,5 +80,3 @@ ui-macros = { git = "https://github.com/Far-Beyond-Pulsar/Pulsar-Native", rev = 
 [patch."https://github.com/Far-Beyond-Pulsar/SceneDB"]
 pulsar_scenedb = { git = "https://github.com/Far-Beyond-Pulsar//SceneDB", rev = "685b1b0aa212b64912549efd583c93480bea027f" }
 
-[dev-dependencies]
-tempfile = "3"

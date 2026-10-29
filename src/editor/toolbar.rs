@@ -23,8 +23,8 @@ use ui::{
     h_flex, ActiveTheme, Disableable, Icon, IconName,
 };
 
-use crate::core::events::{AddGraphComment, CompileShader, ReloadShaderFromDisk};
-use crate::core::types::CompilationState;
+use crate::actions::{AddGraphComment, CompileShader, ReloadShaderFromDisk};
+use crate::features::compilation::CompilationState;
 use crate::editor::panel::{MeshType, ShaderEditorPanel};
 use crate::features::shader_model;
 
@@ -43,11 +43,8 @@ impl ToolbarRenderer {
         // (avoids multiple re-borrows of `panel` inside closures)
         let compile_state = panel.compilation_status.state.clone();
         let is_compiling = panel.compilation_status.is_compiling;
-        let is_dirty = panel.is_dirty;
-        let show_minimap = panel.show_minimap;
-        let show_controls = panel.show_graph_controls;
-        let wire_active_mode = panel.wire_active_test_mode;
-        let wire_hidden_mode = panel.wire_hidden_test_mode;
+        let is_dirty = panel.is_dirty();
+        let previews_on = panel.previews.enabled();
         let shader_name = panel
             .tab_title
             .clone()
@@ -74,8 +71,7 @@ impl ToolbarRenderer {
         };
 
         // ── Edit menu (Pulsar-Native#1012): the active graph's history ───────
-        let active = panel.active_canvas().map(|canvas| canvas.read(cx));
-        let history = active.map(|canvas| canvas.history.clone());
+        let history = Some(panel.history.clone());
         let mut menus = plugin_editor_api::EditorMenuStrip::new("shader-editor-menus").menu(
             plugin_editor_api::EditorMenu::new("Edit").undo_redo(
                 "Undo",
@@ -89,12 +85,10 @@ impl ToolbarRenderer {
                 .action_if("Compile Shader", CompileShader, !is_compiling)
                 .action("Reload from Disk", ReloadShaderFromDisk)
                 .separator()
-                .action_if("Add Comment", AddGraphComment, active.is_some()),
+                .action("Add Comment", AddGraphComment),
         );
-        if let Some(canvas) = active {
-            // Undo/Redo reach the graph the menu is for.
-            menus = menus.action_context(canvas.focus_handle.clone());
-        }
+        // Undo/Redo reach the graph the menu is for.
+        menus = menus.action_context(panel.canvas.read(cx).focus_handle(cx));
 
         // ── Assemble toolbar ─────────────────────────────────────────────────
         h_flex()
@@ -167,7 +161,7 @@ impl ToolbarRenderer {
                     .child(
                         Button::new("toolbar-reload")
                             .icon(IconName::Refresh)
-                            .tooltip("Reload Blueprint from Disk")
+                            .tooltip("Reload Material from Disk")
                             .on_click(cx.listener(|panel, _, window, cx| {
                                 panel.plugin_reload(window, cx);
                             })),
@@ -178,7 +172,7 @@ impl ToolbarRenderer {
                             .icon(IconName::Message)
                             .tooltip("Add Comment to Graph")
                             .on_click(cx.listener(|panel, _, window, cx| {
-                                if let Some(c) = panel.active_canvas().cloned() { c.update(cx, |canvas, cx| canvas.create_comment_at_center(window, cx)); }
+                                panel.add_comment(cx);
                             })),
                     ),
             )
@@ -188,7 +182,7 @@ impl ToolbarRenderer {
                 h_flex().gap_1p5().items_center().child(
                     Button::new("toolbar-find")
                         .icon(IconName::Search)
-                        .tooltip("Find in Blueprint (Ctrl+F)")
+                        .tooltip("Find in Graph (Ctrl+F)")
                         .on_click(cx.listener(|_panel, _, _window, _cx| {
                             // TODO: focus the Find Results panel in the
                             // workspace dock when the workspace API supports
@@ -213,49 +207,13 @@ impl ToolbarRenderer {
                             .icon(IconName::Bug)
                             .tooltip("Debug: live pin texture previews (compiles on every edit)")
                             .on_click(cx.listener(|panel, _, _, cx| {
-                                let enabled = !crate::rendering::layout::texture_previews_enabled();
-                                crate::rendering::layout::set_texture_previews_enabled(enabled);
-                                // Node sizes follow the setting.
-                                for tab in &mut panel.open_tabs {
-                                    crate::rendering::layout::relayout_graph(&mut tab.graph);
-                                }
-                                for (_, canvas) in &panel.graph_panels {
-                                    canvas.update(cx, |canvas, cx| {
-                                        crate::rendering::layout::relayout_graph(&mut canvas.graph);
-                                        cx.notify();
-                                    });
-                                }
+                                let enabled = !panel.previews.enabled();
+                                panel.previews.set_enabled(enabled);
+                                // The presenter reserves (or frees) the preview rows.
+                                panel.canvas.update(cx, |canvas, cx| canvas.refresh_scene(cx));
                                 cx.notify();
                             }));
-                        if crate::rendering::layout::texture_previews_enabled() {
-                            btn.primary()
-                        } else {
-                            btn
-                        }
-                    })
-                    .child({
-                        let btn = Button::new("toolbar-minimap")
-                            .icon(IconName::Map)
-                            .tooltip("Toggle Minimap")
-                            .on_click(cx.listener(|panel, _, _, cx| {
-                                panel.show_minimap = !panel.show_minimap;
-                                cx.notify();
-                            }));
-                        if show_minimap {
-                            btn.primary()
-                        } else {
-                            btn
-                        }
-                    })
-                    .child({
-                        let btn = Button::new("toolbar-graph-controls")
-                            .icon(IconName::Settings)
-                            .tooltip("Toggle Graph Controls")
-                            .on_click(cx.listener(|panel, _, _, cx| {
-                                panel.show_graph_controls = !panel.show_graph_controls;
-                                cx.notify();
-                            }));
-                        if show_controls {
+                        if previews_on {
                             btn.primary()
                         } else {
                             btn

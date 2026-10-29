@@ -18,7 +18,7 @@ use psgc::{
     PinType, Position,
 };
 
-use crate::core::definitions::NodeDefinitions;
+use crate::definitions::NodeDefinitions;
 use crate::io::formats::{serialize_shader_with_header, ShaderAsset};
 
 /// The id stored with an import, so a re-import runs this companion again.
@@ -130,7 +130,7 @@ fn write_material(
     project_root: &Path,
 ) -> Result<(), String> {
     let graph = build_graph(surface, |image| texture_reference(image, folder, project_root))?;
-    let asset = ShaderAsset::from_components(graph, None);
+    let asset = ShaderAsset::with_graph(graph);
     let text = serialize_shader_with_header(&asset)?;
     std::fs::create_dir_all(material)
         .and_then(|()| std::fs::write(material.join(GRAPH_FILE), text))
@@ -162,13 +162,7 @@ fn node(id: &str, kind: &str, x: f64, y: f64) -> Result<NodeInstance, String> {
     let definition = NodeDefinitions::load()
         .get_node_definition(kind)
         .ok_or_else(|| format!("shader node '{kind}' is not available"))?;
-    let pin_type = |pin: &crate::core::definitions::PinDefinition| {
-        if pin.data_type.is_execution() {
-            DataType::Exec
-        } else {
-            DataType::typed(pin.data_type.type_name.clone())
-        }
-    };
+    let pin_type = |pin: &crate::definitions::PinDefinition| pin.data_type.clone();
     let mut instance = NodeInstance::new(id, kind, Position { x, y });
     for input in &definition.inputs {
         instance.inputs.push(PinInstance::new(
@@ -325,6 +319,28 @@ fn feed_pin(
 
 #[cfg(test)]
 mod tests {
+    /// A scratch directory removed on drop (the crate has no tempfile dependency,
+    /// so its tests build from the root workspace too).
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("shader-import-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     use super::*;
     use crate::io::formats::deserialize_shader;
     use plugin_editor_api::SourceImage;
@@ -427,7 +443,7 @@ mod tests {
 
     #[test]
     fn run_writes_a_loadable_material_once_and_keeps_edits() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = TempDir::new();
         let root = dir.path();
         std::fs::write(root.join("rock.png"), b"png").unwrap();
         let native = root.join("rock.mesh");
@@ -462,8 +478,8 @@ mod tests {
     #[test]
     fn a_single_surface_model_gets_one_material_named_for_the_model_and_images_outside_the_project_are_copied_flat(
     ) {
-        let outside = tempfile::tempdir().unwrap();
-        let project = tempfile::tempdir().unwrap();
+        let outside = TempDir::new();
+        let project = TempDir::new();
         let root = project.path();
         let sub = root.join("props");
         std::fs::create_dir_all(&sub).unwrap();

@@ -1,58 +1,55 @@
-//! Shader file format definitions and conversion utilities
+//! The `.material` asset: the file format of a shader graph.
 //!
-//! This module defines the serialization formats for shader files, including
-//! the main ShaderAsset format and helper structures for format conversion.
+//! `main_graph` is a `graphy::GraphDescription`, the same type the canvas edits,
+//! so loading hands the graph to the canvas as it is and saving writes the
+//! canvas's graph back; nothing is converted in between. What the file holds
+//! besides the graph (editor state, metadata, fields this build does not know) is
+//! kept exactly as loaded, so a load/save round trip drops nothing.
 
+use graphy::GraphDescription;
+use graphy_blueprint::GraphViewState;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
-use blueprint_graph::{
-    BlueprintMetadata, GraphViewState,
-};
 
-// ============================================================================
-// Main Shader Asset Format
-// ============================================================================
+/// The file format version this build reads and writes.
+pub const FORMAT_VERSION: u32 = 1;
 
 /// The unified shader file format containing all shader data.
-/// This is the primary format used for saving and loading shader files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShaderAsset {
     /// Format version for forward/backward compatibility
     pub format_version: u32,
 
-    /// The main shader graph for this shader
-    pub main_graph: psgc::GraphDescription,
+    /// The shader graph
+    pub main_graph: GraphDescription,
 
     /// Editor state (open tabs, view positions, etc.)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub editor_state: Option<ShaderEditorState>,
 
     /// Metadata about the shader itself
     #[serde(default)]
-    pub shader_metadata: BlueprintMetadata,
+    pub shader_metadata: ShaderMetadata,
+
+    /// Top-level fields this build does not know, kept as loaded.
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 impl ShaderAsset {
-    /// Create a new empty shader asset
+    /// A new, empty shader asset.
     pub fn new() -> Self {
-        Self {
-            format_version: 1,
-            main_graph: psgc::GraphDescription::new("ShaderGraph"),
-            editor_state: None,
-            shader_metadata: BlueprintMetadata::default(),
-        }
+        Self::with_graph(GraphDescription::new("ShaderGraph"))
     }
 
-    /// Create a shader asset from components
-    pub fn from_components(
-        main_graph: psgc::GraphDescription,
-        editor_state: Option<ShaderEditorState>,
-    ) -> Self {
+    pub fn with_graph(main_graph: GraphDescription) -> Self {
         Self {
-            format_version: 1,
+            format_version: FORMAT_VERSION,
             main_graph,
-            editor_state,
-            shader_metadata: BlueprintMetadata::default(),
+            editor_state: None,
+            shader_metadata: ShaderMetadata::default(),
+            extra: Map::new(),
         }
     }
 }
@@ -63,9 +60,45 @@ impl Default for ShaderAsset {
     }
 }
 
-// ============================================================================
-// Editor State
-// ============================================================================
+/// What the file says about the shader. Fields older files carry (`blueprint_type`,
+/// `tags`, ...) are kept in `extra`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ShaderMetadata {
+    #[serde(default = "default_shader_model")]
+    pub shader_model: String,
+    #[serde(default = "default_stage")]
+    pub stage: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "default_category")]
+    pub category: String,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+fn default_shader_model() -> String {
+    "Standard_unlit".to_string()
+}
+
+fn default_stage() -> String {
+    "Fragment".to_string()
+}
+
+fn default_category() -> String {
+    "Uncategorized".to_string()
+}
+
+impl Default for ShaderMetadata {
+    fn default() -> Self {
+        Self {
+            shader_model: default_shader_model(),
+            stage: default_stage(),
+            description: String::new(),
+            category: default_category(),
+            extra: Map::new(),
+        }
+    }
+}
 
 /// Editor state for restoring the exact UI configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,25 +114,13 @@ pub struct ShaderEditorState {
 }
 
 impl ShaderEditorState {
-    /// Create a new editor state
+    /// The state of an editor showing only the main graph.
     pub fn new() -> Self {
         Self {
             open_tab_ids: vec!["main".to_string()],
             active_tab_index: 0,
             graph_view_states: HashMap::new(),
         }
-    }
-
-    /// Add a tab to the editor state
-    pub fn add_tab(&mut self, tab_id: String) {
-        if !self.open_tab_ids.contains(&tab_id) {
-            self.open_tab_ids.push(tab_id);
-        }
-    }
-
-    /// Set view state for a tab
-    pub fn set_view_state(&mut self, tab_id: String, view_state: GraphViewState) {
-        self.graph_view_states.insert(tab_id, view_state);
     }
 }
 
@@ -109,11 +130,7 @@ impl Default for ShaderEditorState {
     }
 }
 
-// ============================================================================
-// Serialization Helpers
-// ============================================================================
-
-/// Generate a file header comment for shader files
+/// A file header comment for shader files
 pub fn generate_file_header() -> String {
     let now = chrono::Local::now();
     let version = ui::ENGINE_VERSION;
@@ -146,12 +163,14 @@ pub fn strip_header_comments(content: &str) -> String {
         .join("\n")
 }
 
-/// Serialize a shader asset to JSON string with header
-pub fn serialize_shader_with_header(asset: &ShaderAsset) -> Result<String, String> {
-    let json = serde_json::to_string_pretty(asset)
-        .map_err(|e| format!("Failed to serialize shader: {}", e))?;
+/// The asset as JSON text, without the header.
+pub fn serialize_shader(asset: &ShaderAsset) -> Result<String, String> {
+    serde_json::to_string_pretty(asset).map_err(|e| format!("Failed to serialize shader: {}", e))
+}
 
-    Ok(format!("{}{}", generate_file_header(), json))
+/// The asset as file text: header, then JSON.
+pub fn serialize_shader_with_header(asset: &ShaderAsset) -> Result<String, String> {
+    Ok(format!("{}{}", generate_file_header(), serialize_shader(asset)?))
 }
 
 /// Deserialize a shader asset from JSON string (with or without header)
@@ -162,16 +181,7 @@ pub fn deserialize_shader(content: &str) -> Result<ShaderAsset, String> {
         .map_err(|e| format!("Failed to deserialize shader: {}", e))
 }
 
-// ============================================================================
-// Format Version Checking
-// ============================================================================
-
 /// Check if a shader format version is supported
 pub fn is_version_supported(version: u32) -> bool {
-    version == 1 // Currently only version 1 is supported
-}
-
-/// Get the current shader format version
-pub fn current_format_version() -> u32 {
-    1
+    version == FORMAT_VERSION
 }
