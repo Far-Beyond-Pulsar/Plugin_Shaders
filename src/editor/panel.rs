@@ -106,25 +106,6 @@ impl Default for DocMeta {
     }
 }
 
-/// A context menu requested on the canvas.
-#[derive(Clone, Debug)]
-pub struct CanvasMenu {
-    pub at: Point<Pixels>,
-    pub local: Vec2,
-    pub target: MenuTarget,
-    pub items: Vec<MenuItem>,
-}
-
-/// The node picker: opened by a right click on empty canvas, or by dropping a wire
-/// there (then it offers nodes the wire can reach).
-pub struct Palette {
-    pub at: Point<Pixels>,
-    pub graph_pos: Vec2,
-    pub source: Option<graphy::PinRef>,
-    pub entries: Vec<graphy_gpui::CatalogEntry>,
-    pub focus_pending: bool,
-}
-
 /// Main shader editor struct
 pub struct ShaderEditorPanel {
     pub(crate) focus_handle: FocusHandle,
@@ -146,9 +127,6 @@ pub struct ShaderEditorPanel {
     pub load_error: Option<String>,
 
     // Canvas overlays
-    pub(crate) menu: Option<CanvasMenu>,
-    pub(crate) palette: Option<Palette>,
-    pub(crate) palette_input: Entity<InputState>,
     pub(crate) editing_comment: Option<usize>,
     pub(crate) comment_input: Entity<InputState>,
 
@@ -297,23 +275,13 @@ impl ShaderEditorPanel {
         let previews = Arc::new(PinPreviews::new());
         let profile = Arc::new(ShaderProfile::new(previews.clone()));
         let canvas = cx.new(|cx| {
-            GraphCanvas::new(graph, profile.clone(), system_fonts(), cx)
+            GraphCanvas::new(graph, profile.clone(), system_fonts(), crate::theme::graph_theme(cx), cx)
                 .expect("the bundled canvas font parses")
         });
         previews.attach(canvas.downgrade(), cx.weak_entity());
 
-        let palette_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search nodes…"));
         let comment_input = cx.new(|cx| InputState::new(window, cx).placeholder("Comment text..."));
         let mut subscriptions = Vec::new();
-        subscriptions.push(cx.subscribe_in(
-            &palette_input,
-            window,
-            |_this, _input, event: &InputEvent, _window, cx| {
-                if matches!(event, InputEvent::Change) {
-                    cx.notify();
-                }
-            },
-        ));
         subscriptions.push(cx.subscribe_in(
             &comment_input,
             window,
@@ -344,9 +312,6 @@ impl ShaderEditorPanel {
             tab_title: None,
             file_loading: false,
             load_error: None,
-            menu: None,
-            palette: None,
-            palette_input,
             editing_comment: None,
             comment_input,
             compilation_status: CompilationStatus::default(),
@@ -393,8 +358,6 @@ impl ShaderEditorPanel {
             history.clear();
             history.mark_saved();
         }
-        self.menu = None;
-        self.palette = None;
         self.editing_comment = None;
         self.detail_inputs.clear();
         cx.notify();
@@ -449,7 +412,6 @@ impl ShaderEditorPanel {
     }
 
     fn after_edit(&mut self, cx: &mut Context<Self>) {
-        self.menu = None;
         cx.notify();
     }
 
@@ -476,115 +438,33 @@ impl ShaderEditorPanel {
             CanvasEvent::SelectionChanged => cx.notify(),
             CanvasEvent::ViewChanged => {}
             CanvasEvent::Request(action) => self.on_canvas_request(action.clone(), window, cx),
+            CanvasEvent::NodePicked {
+                definition,
+                graph_pos,
+                source,
+            } => self.place_picked(definition, *graph_pos, source.clone(), cx),
         }
     }
 
     fn on_canvas_request(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
-        let canvas = self.canvas.clone();
         match action {
-            Action::ContextMenu { at, target, items } => {
-                self.palette = None;
-                let screen = canvas.read(cx).local_to_window(at);
-                if let MenuTarget::Canvas { graph_pos } = target {
-                    self.open_palette(screen, graph_pos, None, window, cx);
-                    self.menu = None;
-                } else {
-                    self.menu = Some(CanvasMenu {
-                        at: screen,
-                        local: at,
-                        target,
-                        items,
-                    });
-                }
-                cx.notify();
-            }
             Action::CommentActivated(index) => self.start_comment_editing(index, window, cx),
-            Action::ConnectionDropped { from, side, at } => {
-                if side != graphy_render::PinSide::Output {
-                    return;
-                }
-                let screen = canvas.read(cx).local_to_window(at);
-                let graph_pos = canvas.read(cx).window_to_graph(screen);
-                self.menu = None;
-                self.open_palette(screen, graph_pos, Some(from), window, cx);
-                cx.notify();
-            }
             Action::ConnectionRefused(why) => tracing::debug!("connection refused: {why}"),
             _ => {}
         }
     }
 
-    /// Runs the entry of the open context menu.
-    pub(crate) fn run_menu_item(&mut self, menu: CanvasMenu, id: &str, cx: &mut Context<Self>) {
-        self.menu = None;
-        self.canvas.update(cx, |canvas, cx| {
-            canvas.run_menu_item(&menu.target, id, menu.local, cx)
-        });
-        cx.notify();
-    }
-
-    // ── Node picker ────────────────────────────────────────────────────────
-
-    fn open_palette(
+    /// Adds the node picked in the canvas's picker where it was opened, wired to
+    /// the dragged wire's source if there was one.
+    fn place_picked(
         &mut self,
-        at: Point<Pixels>,
+        definition: &str,
         graph_pos: Vec2,
         source: Option<graphy::PinRef>,
-        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let profile = self.profile.clone();
-        let mut entries = profile.catalog();
-        if let Some(source) = &source {
-            // Only nodes the dragged wire can reach.
-            let graph = self.canvas.read(cx).graph();
-            let from_type = graph
-                .nodes
-                .get(&source.node)
-                .and_then(|n| n.outputs.iter().find(|p| p.id == source.pin))
-                .map(|p| p.data_type().clone());
-            if let Some(from_type) = from_type {
-                let resolver = profile.type_resolver();
-                entries.retain(|entry| {
-                    profile
-                        .create_node(&entry.definition, "probe", Position::new(0.0, 0.0))
-                        .is_some_and(|node| {
-                            node.inputs.iter().any(|pin| {
-                                resolver
-                                    .compatibility(&from_type, pin.data_type())
-                                    .is_connectable()
-                            })
-                        })
-                });
-            }
-        }
-        self.palette_input
-            .update(cx, |input, cx| input.set_value("", window, cx));
-        self.palette = Some(Palette {
-            at,
-            graph_pos,
-            source,
-            entries,
-            focus_pending: true,
-        });
-    }
-
-    pub(crate) fn close_palette(&mut self, cx: &mut Context<Self>) {
-        self.palette = None;
-        cx.notify();
-    }
-
-    /// Adds the picked node where the picker was opened, wired to the dragged
-    /// wire's source if there was one.
-    pub(crate) fn place_picked(&mut self, definition: &str, cx: &mut Context<Self>) {
-        let Some(palette) = self.palette.take() else {
-            return;
-        };
-        let at = Position::new(
-            snap(f64::from(palette.graph_pos.x)),
-            snap(f64::from(palette.graph_pos.y)),
-        );
-        self.add_node(definition, at, palette.source, cx);
+        let at = Position::new(snap(f64::from(graph_pos.x)), snap(f64::from(graph_pos.y)));
+        self.add_node(definition, at, source, cx);
         cx.notify();
     }
 
@@ -602,7 +482,7 @@ impl ShaderEditorPanel {
         let mut commands = vec![GraphCommand::AddNode(node.clone())];
         if let Some(source) = source {
             let graph = self.canvas.read(cx).graph();
-            commands.extend(connect_commands(&self.profile, graph, &source, &node));
+            commands.extend(graphy_gpui::connect_new_node_commands(&*self.profile, graph, &source, &node));
         }
         self.canvas
             .update(cx, |canvas, cx| canvas.apply("Add node", &commands, cx))
@@ -752,57 +632,3 @@ impl ShaderEditorPanel {
     }
 }
 
-/// Commands wiring `source` (an output pin) to the first compatible input of the
-/// freshly added `node`.
-fn connect_commands(
-    profile: &ShaderProfile,
-    graph: &GraphDescription,
-    source: &graphy::PinRef,
-    node: &NodeInstance,
-) -> Vec<GraphCommand> {
-    let Some(src_pin) = graph
-        .nodes
-        .get(&source.node)
-        .and_then(|n| n.outputs.iter().find(|p| p.id == source.pin))
-    else {
-        return Vec::new();
-    };
-    let resolver = profile.type_resolver();
-    let Some(target) = node.inputs.iter().find(|p| {
-        resolver
-            .compatibility(src_pin.data_type(), p.data_type())
-            .is_connectable()
-    }) else {
-        return Vec::new();
-    };
-    let exec = src_pin.data_type().is_execution();
-    let mut commands = Vec::new();
-    // An execution output (or a reroute's) drives one wire.
-    let single_output = exec
-        || graph
-            .nodes
-            .get(&source.node)
-            .is_some_and(|n| n.is_reroute());
-    if single_output {
-        commands.extend(
-            graph
-                .connections
-                .iter()
-                .filter(|c| c.source_node == source.node && c.source_pin == source.pin)
-                .cloned()
-                .map(GraphCommand::Disconnect),
-        );
-    }
-    commands.push(GraphCommand::Connect(graphy::Connection::new(
-        &source.node,
-        &source.pin,
-        &node.id,
-        &target.id,
-        if exec {
-            graphy::ConnectionType::Execution
-        } else {
-            graphy::ConnectionType::Data
-        },
-    )));
-    commands
-}

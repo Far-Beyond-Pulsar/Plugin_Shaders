@@ -34,6 +34,7 @@ mod features;
 mod io;
 mod previews;
 mod profile;
+mod theme;
 mod types;
 mod ui_components;
 

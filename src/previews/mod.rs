@@ -159,8 +159,12 @@ impl PinPreviews {
     }
 
     /// The content of the preview row `slot` (the output index) of `node`.
+    ///
+    /// Runs while the canvas renders, so it takes the canvas's `graph` instead
+    /// of reading the canvas entity, which is mid-update.
     pub fn slot(
         &self,
+        graph: &GraphDescription,
         node: &str,
         slot: u32,
         _window: &mut Window,
@@ -176,15 +180,14 @@ impl PinPreviews {
             return Some(view.clone().into_any_element());
         }
         // Forget previews of nodes that are gone before adding another.
-        if let Some(canvas) = canvas.upgrade() {
-            let graph = canvas.read(cx).graph();
-            self.views.borrow_mut().retain(|(id, slot), _| {
-                graph.nodes.get(id).is_some_and(|n| {
-                    n.outputs
-                        .get(*slot as usize)
-                        .is_some_and(|pin| is_texture_previewable(pin.data_type()))
-                })
-            });
+        self.views.borrow_mut().retain(|(id, slot), _| {
+            graph.nodes.get(id).is_some_and(|n| {
+                n.outputs
+                    .get(*slot as usize)
+                    .is_some_and(|pin| is_texture_previewable(pin.data_type()))
+            })
+        });
+        {
             let live = self.views.borrow();
             self.errors.borrow_mut().retain(|key, _| live.contains_key(key));
         }

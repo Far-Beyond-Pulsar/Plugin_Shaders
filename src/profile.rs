@@ -177,7 +177,11 @@ impl GraphProfile for ShaderProfile {
                     definition: node.id.clone(),
                     title: node.name.clone(),
                     category: category.name.clone(),
-                    keywords: vec![node.description.clone()],
+                    keywords: Vec::new(),
+                    description: node.description.clone(),
+                    icon: node.icon.clone(),
+                    color: graphy_render::geom::parse_hex(&category.color),
+                    inputs: Some(node.inputs.iter().map(|p| p.data_type.clone()).collect()),
                 })
             })
             .collect()
@@ -203,12 +207,13 @@ impl GraphProfile for ShaderProfile {
 impl GpuiProfile for ShaderProfile {
     fn render_slot(
         &self,
+        graph: &graphy::GraphDescription,
         node: &str,
         slot: u32,
         window: &mut Window,
         cx: &mut App,
     ) -> Option<AnyElement> {
-        self.previews.slot(node, slot, window, cx)
+        self.previews.slot(graph, node, slot, window, cx)
     }
 }
 
