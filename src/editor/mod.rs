@@ -1,16 +1,12 @@
 //! Main editor state container and lifecycle management.
 //!
-//! This module contains the ShaderEditorPanel - the central state container
-//! for the blueprint editor, along with workspace, tabs, and toolbar.
+//! [`ShaderEditorPanel`] holds the canvas that owns the document, the history,
+//! and the chrome around them (toolbar, dock workspace, compiler output).
 
-pub mod entity_ops;
+pub mod canvas_view;
 pub mod panel;
 pub mod panel_render;
-pub mod tabs;
 pub mod toolbar;
-pub mod undo_ops;
 pub mod workspace;
 pub mod workspace_panels;
 
-pub use panel::ShaderEditorPanel;
-pub use tabs::GraphTab;

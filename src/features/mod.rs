@@ -1,21 +1,13 @@
-//! Feature modules - each feature (nodes, connections, etc.) is self-contained
+//! Feature modules: the shader-specific parts of the editor.
 //!
-//! Each feature module typically contains:
-//! - types.rs: Feature-specific types
-//! - operations.rs: Business logic and state mutations
-//! - rendering.rs: GPUI rendering code
-//! - panel.rs: Dockable panel (if applicable)
+//! Graph editing itself (nodes, connections, comments, selection, clipboard,
+//! viewport, undo) belongs to the shared Graphy canvas; what is left here is what
+//! only shaders have.
 
-pub mod clipboard;
-pub mod comments;
 pub mod compilation;
-pub mod connections;
 pub mod import_companion;
-pub mod nodes;
 pub mod preview;
 pub mod shader_model;
-pub mod undo;
-pub mod viewport;
 
 /// Initialize all feature modules that need startup registration
 pub fn initialize_features() {

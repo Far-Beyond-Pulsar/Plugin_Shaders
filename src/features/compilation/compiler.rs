@@ -1,7 +1,7 @@
 //! Compiler - Compile shader graphs to WGSL code via PSGC
 
 use crate::editor::panel::{CompilationHistoryEntry, ShaderEditorPanel};
-use crate::{CompilationState, CompilationStatus};
+use super::{CompilationState, CompilationStatus};
 use gpui::*;
 
 // ── ShaderEditorPanel helpers ──────────────────────────────────────────────
@@ -55,66 +55,16 @@ impl ShaderEditorPanel {
     }
 
     /// Compile to WGSL via PSGC
-    pub fn compile_to_wgsl(&self) -> Result<String, String> {
-        Self::compile_blueprint(self.main_graph_snapshot()?)
-    }
-
-    /// A copy of the main tab's graph, taken on the UI thread so the compile
-    /// itself can run elsewhere without touching editor state.
-    fn main_graph_snapshot(&self) -> Result<crate::BlueprintGraph, String> {
-        self.open_tabs
-            .iter()
-            .find(|tab| tab.is_main)
-            .or_else(|| self.open_tabs.first())
-            .map(|tab| tab.graph.clone())
-            .ok_or_else(|| "No shader graph is open".to_string())
+    pub fn compile_to_wgsl(&self, cx: &App) -> Result<String, String> {
+        Self::compile_document(self.document_snapshot(cx)?)
     }
 
     /// PSGC compile plus WGSL validation. Pure CPU work on owned data: run
     /// it on a worker, never inside a UI update.
-    fn compile_blueprint(graph: crate::BlueprintGraph) -> Result<String, String> {
-        let wgsl = Self::compile_graph_to_wgsl(&graph)?;
+    fn compile_document(graph: graphy::GraphDescription) -> Result<String, String> {
+        let wgsl = super::lowering::compile_graph_to_wgsl(&graph)?;
         validate_wgsl(&wgsl)?;
         Ok(wgsl)
-    }
-
-    /// Dump shader debug info
-    fn dump_shader_debug_info(&self, graph: &psgc::GraphDescription) {
-        #[derive(serde::Serialize)]
-        struct ShaderDebugDump {
-            active_tab: String,
-            node_count: usize,
-            connection_count: usize,
-            nodes: Vec<serde_json::Value>,
-        }
-
-        let main_tab = self
-            .open_tabs
-            .iter()
-            .find(|t| t.is_main)
-            .unwrap_or(&self.open_tabs[0]);
-
-        let nodes: Vec<serde_json::Value> = graph
-            .nodes
-            .values()
-            .map(|n| {
-                serde_json::json!({
-                    "id": n.id,
-                    "node_type": n.node_type,
-                })
-            })
-            .collect();
-
-        let dump = ShaderDebugDump {
-            active_tab: main_tab.name.clone(),
-            node_count: graph.nodes.len(),
-            connection_count: graph.connections.len(),
-            nodes,
-        };
-
-        if let Ok(json) = serde_json::to_string_pretty(&dump) {
-            let _ = std::fs::write("shader_graph_debug.json", &json);
-        }
     }
 
     /// Start compilation (called from toolbar)
@@ -145,8 +95,7 @@ impl ShaderEditorPanel {
                 Some("Compiling shader graph to WGSL".to_string()),
             );
 
-            panel.sync_all_canvases_to_tabs(cx);
-            panel.main_graph_snapshot()
+            panel.document_snapshot(cx)
         });
 
         // The compile itself runs on the background executor; the editor
@@ -154,7 +103,7 @@ impl ShaderEditorPanel {
         let result = match result {
             Ok(Ok(graph)) => Ok(cx
                 .background_executor()
-                .spawn(async move { Self::compile_blueprint(graph) })
+                .spawn(async move { Self::compile_document(graph) })
                 .await),
             Ok(Err(error)) => Ok(Err(error)),
             Err(error) => Err(error),
@@ -238,7 +187,7 @@ impl ShaderEditorPanel {
     }
 }
 
-fn validate_wgsl(source: &str) -> Result<(), String> {
+pub(crate) fn validate_wgsl(source: &str) -> Result<(), String> {
     let module = naga::front::wgsl::parse_str(source)
         .map_err(|error| format!("WGSL validation failed: {}", error.emit_to_string(source)))?;
     naga::valid::Validator::new(

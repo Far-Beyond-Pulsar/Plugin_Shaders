@@ -3,16 +3,19 @@
 //! # Shader Graph Editor Plugin
 //!
 //! Visual shader graph editor for creating materials through node-based programming.
-//! Adapts the blueprint editor architecture for WGSL shader authoring.
+//! The graph is drawn, laid out, hit-tested and edited by the shared Graphy canvas
+//! (`graphy-gpui`); this crate supplies what is specific to shaders.
 //!
 //! ## Architecture
 //!
-//! - **core**: Core data types (BlueprintNode, BlueprintGraph, Connection, etc.)
-//! - **editor**: Main editor state container and lifecycle management
-//! - **features**: Feature modules (nodes, connections, comments, compilation, preview)
-//! - **rendering**: Visual rendering layer (graph canvas, input handling, styling)
-//! - **ui**: Reusable UI components and panels
-//! - **io**: File I/O and persistence
+//! - **editor**: the editor panel (canvas, history, dock workspace, toolbar)
+//! - **profile** / **types**: the Graphy profile: node catalogue, WGSL connection
+//!   rules, node and pin look, preview rows
+//! - **previews**: live texture previews filling those rows
+//! - **definitions**: shader node definitions from PSGC
+//! - **features**: compilation (PSGC), material preview, shader models, import
+//! - **ui_components**: the Details panel
+//! - **io**: the `.material` asset and its save/load
 
 use gpui::*;
 use plugin_editor_api::*;
@@ -23,22 +26,23 @@ use std::{path::PathBuf, sync::Arc};
 use ui::dock::PanelView;
 
 // Module declarations
+mod actions;
 mod ai_tools;
-mod core;
+mod definitions;
 mod editor;
 mod features;
 mod io;
-mod rendering;
+mod previews;
+mod profile;
+mod types;
 mod ui_components;
 
 // Re-export main types for plugin API compatibility
-pub use core::definitions::*;
-pub use core::events::*;
-pub use core::graph::*;
-pub use core::types::*;
+pub use actions::*;
+pub use definitions::*;
 pub use editor::panel::ShaderEditorPanel;
 
-pub fn upsert_ai_session(file_path: PathBuf, graph: BlueprintGraph) {
+pub fn upsert_ai_session(file_path: PathBuf, graph: graphy::GraphDescription) {
     ai_tools::upsert_session(file_path, graph);
 }
 
@@ -166,7 +170,7 @@ impl ShaderEditorPlugin {
                 Ok(p) => {
                     tracing::info!(
                         "create_shader_editor: new_with_path succeeded, graph has {} nodes, current_material_path={:?}",
-                        p.graph.nodes.len(),
+                        p.graph_snapshot(cx).nodes.len(),
                         p.current_material_path,
                     );
                     p
@@ -176,14 +180,14 @@ impl ShaderEditorPlugin {
                     let p = ShaderEditorPanel::new(window, cx);
                     tracing::warn!(
                         "create_shader_editor: fell back to empty panel, graph has {} nodes",
-                        p.graph.nodes.len(),
+                        p.graph_snapshot(cx).nodes.len(),
                     );
                     p
                 }
             }
         });
 
-        let graph_snapshot = panel.read(cx).graph.clone();
+        let graph_snapshot = panel.read(cx).graph_snapshot(cx);
         tracing::info!(
             "create_shader_editor: AI session snapshot has {} nodes",
             graph_snapshot.nodes.len(),

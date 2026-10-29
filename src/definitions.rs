@@ -5,10 +5,9 @@
 //! node definitions. It uses a global singleton pattern for efficient access
 //! to node metadata throughout the application.
 
-use super::types::{PinDataType, PinType};
+use graphy::DataType;
 use psgc::metadata::get_shader_nodes;
 use psgc::NodeTypes;
-use serde::Deserialize;
 use std::collections::HashMap;
 
 // ============================================================================
@@ -16,13 +15,13 @@ use std::collections::HashMap;
 // ============================================================================
 
 /// Root structure containing all node definitions organized by category.
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub struct NodeDefinitions {
     pub categories: Vec<NodeCategory>,
 }
 
 /// A category of related nodes with a name and color theme.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NodeCategory {
     pub name: String,
     pub color: String,
@@ -30,7 +29,7 @@ pub struct NodeCategory {
 }
 
 /// Complete definition of a node including pins, properties, and metadata.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NodeDefinition {
     pub id: String,
     pub name: String,
@@ -44,17 +43,15 @@ pub struct NodeDefinition {
     /// True when the underlying shader node is `NodeTypes::event`.
     /// Used to classify as NodeType::Event. No shader graph nodes are
     /// currently events — every node, including the output sink, is pure.
-    #[serde(default)]
     pub is_event: bool,
 }
 
 /// Definition of a single pin on a node.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct PinDefinition {
     pub id: String,
     pub name: String,
-    pub data_type: PinDataType,
-    pub pin_type: PinType,
+    pub data_type: DataType,
 }
 
 // ============================================================================
@@ -113,8 +110,7 @@ impl NodeDefinitions {
             let out_pin = PinDefinition {
                 id: "result".to_string(),
                 name: "".to_string(),
-                data_type: PinDataType::from_type_str(*type_str),
-                pin_type: PinType::Output,
+                data_type: DataType::typed(*type_str),
             };
             categories_map
                 .entry("Input".to_string())
@@ -143,8 +139,7 @@ impl NodeDefinitions {
                 inputs.push(PinDefinition {
                     id: param.name.to_string(),
                     name: param.name.to_string(),
-                    data_type: PinDataType::from_type_str(&param.param_type),
-                    pin_type: PinType::Input,
+                    data_type: DataType::typed(param.param_type.as_str()),
                 });
             }
 
@@ -153,8 +148,7 @@ impl NodeDefinitions {
                 outputs.push(PinDefinition {
                     id: exec_pin.to_string(),
                     name: exec_pin.to_string(),
-                    data_type: PinDataType::execution(),
-                    pin_type: PinType::Output,
+                    data_type: DataType::Exec,
                 });
             }
 
@@ -164,8 +158,7 @@ impl NodeDefinitions {
                     outputs.push(PinDefinition {
                         id: out.name.clone(),
                         name: out.name.clone(),
-                        data_type: PinDataType::from_type_str(&out.param_type),
-                        pin_type: PinType::Output,
+                        data_type: DataType::typed(out.param_type.as_str()),
                     });
                 }
             // Fall back to a single "result" pin from return_type.
@@ -173,8 +166,7 @@ impl NodeDefinitions {
                 outputs.push(PinDefinition {
                     id: "result".to_string(),
                     name: "result".to_string(),
-                    data_type: PinDataType::from_type_str(&return_type.type_string),
-                    pin_type: PinType::Output,
+                    data_type: DataType::typed(return_type.type_string.as_str()),
                 });
             }
 
